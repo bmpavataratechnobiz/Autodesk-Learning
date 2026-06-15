@@ -193,7 +193,7 @@ def get_hubs_projects_and_save(user_id):
                 print("$" * 100)
                 print(f"Project : {project_name}, Users : {autodesk_users}, Count : {count}")
                 print("$" * 100)
-
+                
                 # ++++++++++++++++++++++++++++++++++++++++ version set map and version tracker +++++++++++++++++++++++++++++++++++++++
                 version_sets_response = requests.get(
                     f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
