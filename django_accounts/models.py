@@ -45,6 +45,9 @@ class CustomUser(AbstractUser):
     terms_and_conditions = models.BooleanField(default=True)
     date_of_birth = models.DateField(blank=True, null=True)
     phone = models.CharField(max_length=10, blank=True, null=True) 
+    access_token = models.TextField(blank=True, null=True)
+    refresh_token = models.TextField(blank=True, null=True)
+    expires_at = models.DateTimeField(blank=True, null=True)
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []

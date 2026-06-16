@@ -9,9 +9,6 @@ class AutodeskUser(models.Model):
     autodesk_user_id = models.CharField(max_length=255, unique=True)
     email = models.EmailField(max_length=255)
     name = models.CharField(max_length=255)
-    access_token = models.TextField()
-    refresh_token = models.TextField()
-    expires_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -45,7 +42,7 @@ class AutoDeskProject(models.Model):
     hub_id = models.TextField()
     hub_name = models.CharField(max_length=255, blank=True, null=True)
     name = models.CharField(max_length=255)
-    users = models.ManyToManyField(AutodeskUser, related_name='projects', blank=True)
+    members = models.ManyToManyField(AutodeskUser, through="AutodeskProjectMembers", related_name='projects', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -97,3 +94,26 @@ class AutodeskSheets(models.Model):
 
     def __str__(self):
         return self.project.name
+
+
+
+class AutodeskProjectMembers(models.Model):
+    project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE, related_name="project_members")
+    autodesk_user = models.ForeignKey(AutodeskUser, on_delete=models.CASCADE)
+    name = models.CharField(max_length=255)
+    email = models.EmailField(max_length=255)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    status = models.CharField(max_length=30)
+    company = models.CharField(max_length=255, blank=True, null=True)
+    roles = models.JSONField(blank=True, null=True)
+    access_levels = models.JSONField(blank=True, null=True)
+    added_on = models.DateTimeField(blank=True, null=True)
+    products = models.JSONField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+    def __str__(self):
+        return f"{self.project} , {self.autodesk_user}, {self.status}"
+

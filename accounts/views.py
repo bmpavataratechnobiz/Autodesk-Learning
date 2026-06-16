@@ -18,22 +18,6 @@ APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
 APS_USERINFO_URL = "https://api.userprofile.autodesk.com/userinfo"
 
 
-# class AutodeskLoginView(APIView):
-#     authentication_classes = []
-#     permission_classes = []
-
-#     def get(self, request):
-#         scopes = "data:read data:write account:read viewables:read bucket:read"
-
-#         auth_url = (
-#             f"{APS_AUTH_URL}"
-#             f"?response_type=code"
-#             f"&client_id={settings.APS_CLIENT_ID}"
-#             f"&redirect_uri={settings.APS_REDIRECT_URI}"
-#             f"&scope={scopes}"
-#         )
-
-#         return redirect(auth_url)
 class AutodeskLoginView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -131,7 +115,7 @@ class AutodeskCallbackView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user, created = CustomUser.objects.get_or_create(
+        user, _ = CustomUser.objects.get_or_create(
             email=email,
             defaults={
                 "email":email,
@@ -146,18 +130,17 @@ class AutodeskCallbackView(APIView):
                 "autodesk_user_id":profile["sub"],
                 "email":profile["email"],
                 "name":profile["name"],               
-                "access_token":aps_access_token,
-                "refresh_token":aps_refresh_token,
-                "expires_at":timezone.now() + timedelta(seconds=aps_tokens["expires_in"])
             }
         )
+        
+        user.access_token = aps_access_token
+        user.refresh_token = aps_refresh_token
+        user.expires_at = timezone.now() + timedelta(seconds=aps_tokens["expires_in"])
+        user.save()
 
         refresh = RefreshToken.for_user(user)
 
         refresh["autodesk_connected"] = True
-
-        # access_token = str(refresh.access_token)
-        # refresh_token = str(refresh)
 
         return Response(
             {

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AutodeskSheets, AutoDeskProject, AutodeskUser
+from .models import AutodeskSheets, AutoDeskProject, AutodeskProjectMembers
 
 
 class AutodeskSheetsSerializer(serializers.ModelSerializer):
@@ -8,15 +8,15 @@ class AutodeskSheetsSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class AutodeskUsersSerializer(serializers.ModelSerializer):
+class AutodeskProjectMembersSerializer(serializers.ModelSerializer):
     class Meta:
-        model = AutodeskUser
+        model = AutodeskProjectMembers
         fields = "__all__"
 
 
 class AutodeskProjectSerializer(serializers.ModelSerializer):
-    users = AutodeskUsersSerializer(many=True)
+    members = AutodeskProjectMembersSerializer(source='project_members', read_only=True, many=True)
 
     class Meta:
         model = AutoDeskProject
-        fields = ["id", "project_id", "name", "account", "hub_name", "hub_id", "users", "created_at"]
+        fields = ["id", "project_id", "name", "account", "hub_name", "hub_id", "members", "created_at"]

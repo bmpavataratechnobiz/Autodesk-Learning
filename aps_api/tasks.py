@@ -1,11 +1,12 @@
 import requests #type:ignore
 from django.conf import settings
-from .models import AutodeskAccount, AutoDeskProject, AutodeskUser, AutodeskSheets, AutodeskVersionSet
+from .models import AutodeskAccount, AutoDeskProject, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
 from collections import defaultdict
-
+from django.utils.dateparse import parse_datetime
+from django_accounts.models import CustomUser
 
 
 APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
@@ -132,12 +133,15 @@ def download_sheet_pdf(access_token, project_id, sheet_id, sheet_number, upload_
 @shared_task
 def get_hubs_projects_and_save(user_id):
     try:
-        autodesk_user = AutodeskUser.objects.get(user__id=user_id)
+        user = CustomUser.objects.get(id=user_id)
 
         headers = {
-            "Authorization": f"Bearer {autodesk_user.access_token}"
+            "Authorization": f"Bearer {user.access_token}"
         }
 
+        autodesk_user = AutodeskUser.objects.get(
+            user=user
+        )
         # +++++++++++++++++++++++++++++++++++++++++++++ storing hub +++++++++++++++++++++++++++++++++++++++++++++
         hubs_data = get_hubs(headers)
         for hub_data in hubs_data:        
@@ -175,23 +179,48 @@ def get_hubs_projects_and_save(user_id):
 
                 project_users_data = project_users_response.json().get("results", [])
 
-                autodesk_users = []
+                project_members = []
                 for project_user_data in project_users_data:
-                    autodesk_user_obj, _ = AutodeskUser.objects.get_or_create(
+                    # my_user = CustomUser.objects.update_or_create(
+                    #     email=project_user_data["email"],
+                    #     defaults={
+                    #         "name":project_user_data["name"],
+                    #         "password":project_user_data["name"],
+                    #         "password2":project_user_data["name"]
+                    #     }
+                    # ) 
+
+                    autodesk_user_obj, _ = AutodeskUser.objects.update_or_create(
+                        # user=my_user,
                         autodesk_user_id=project_user_data.get("autodeskId"),
                         defaults={
+                            # "autodesk_user_id":project_user_data.get("autodeskId"),
                             "email":project_user_data.get("email"),
                             "name":project_user_data.get("name")
                         }
                     )
-                    autodesk_users.append(autodesk_user_obj)
+
+                    project_member_obj, _ = AutodeskProjectMembers.objects.update_or_create(
+                        project = project,
+                        autodesk_user = autodesk_user_obj,
+                        defaults={
+                            "email":project_user_data.get("email"),
+                            "name":project_user_data.get("name"),
+                            "phone":(project_user_data.get("phone", {}) or {}).get("number"),
+                            "status":project_user_data.get("status"),
+                            "company":project_user_data.get("companyName"),
+                            "roles":project_user_data.get("roles"),
+                            "access_levels":project_user_data.get("accessLevels"),
+                            "added_on":parse_datetime(project_user_data.get("addedOn")),
+                            "products":project_user_data.get("products")
+                        }
+                    )
+                    project_members.append(project_member_obj)
                 
-                project.users.set(autodesk_users)
-                project.save()
                 project_name = project_data["attributes"]["name"]
-                count = project.users.count()
+                count = project.members.count()
                 print("$" * 100)
-                print(f"Project : {project_name}, Users : {autodesk_users}, Count : {count}")
+                print(f"Project : {project_name}, Members : {project_members}, Count : {count}")
                 print("$" * 100)
                 
                 # ++++++++++++++++++++++++++++++++++++++++ version set map and version tracker +++++++++++++++++++++++++++++++++++++++
@@ -312,7 +341,7 @@ def get_hubs_projects_and_save(user_id):
                     )
 
                     # +++++++++++++++++++++++++++++++++++++++++++++ storing sheet file +++++++++++++++++++++++++++++++++++++++++++++                   
-                    download_sheet_pdf.delay(autodesk_user.access_token, project_id, sheet_id, sheet_data["number"], sheet_data["uploadFileName"], sheet_obj.id)
+                    download_sheet_pdf.delay(user.access_token, project_id, sheet_id, sheet_data["number"], sheet_data["uploadFileName"], sheet_obj.id)
 
                               
                 # +++++++++++++++++++++++++++++++++++++++++++++++++++ STORE DELETED SHEETS DATA ++++++++++++++++++++++++++++++++++++++++++++++++++++++
