@@ -1,8 +1,8 @@
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from .tasks import get_hubs_projects_and_save
-# from .tasks2 import get_hubs_projects_and_save
+from .tasks import sync_autodesk_data
+# from .tasks2 import sync_autodesk_data
 from .models import AutoDeskProject, AutodeskSheets, AutodeskUser, AutodeskAccount
 from rest_framework.response import Response
 from rest_framework import status 
@@ -14,7 +14,7 @@ class FetchHubProjectsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        task = get_hubs_projects_and_save.delay(request.user.id) 
+        task = sync_autodesk_data.delay(request.user.id) 
         return Response(
             {
                 "task_id":task.id,

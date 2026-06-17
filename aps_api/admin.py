@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles
 
 
 
@@ -48,9 +48,16 @@ class AutodeskProjectMembersAdmin(admin.ModelAdmin):
     list_display_links = ['project', 'autodesk_user', 'status', 'added_on']
 
 
+class AutodeskProjectFilesAdmin(admin.ModelAdmin):
+    model = AutodeskProjectFiles
+    list_display = ["file_id", "version", "created_by_name", "updated_by_name"]
+    list_display_links = ["file_id", "version", "created_by_name", "updated_by_name"]
+
+
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
 admin.site.register(AutodeskAccount, AutodeskAccountAdmin)
 admin.site.register(AutoDeskProject, AutodeskProjectAdmin)
 admin.site.register(AutodeskSheets, AutodeskSheetsAdmin)
 admin.site.register(AutodeskVersionSet, AutodeskVersionSetAdmin)
 admin.site.register(AutodeskProjectMembers, AutodeskProjectMembersAdmin)
+admin.site.register(AutodeskProjectFiles, AutodeskProjectFilesAdmin)

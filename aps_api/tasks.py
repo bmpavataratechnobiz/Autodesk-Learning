@@ -1,6 +1,6 @@
 import requests #type:ignore
 from django.conf import settings
-from .models import AutodeskAccount, AutoDeskProject, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers
+from .models import AutodeskAccount, AutoDeskProject, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
@@ -62,14 +62,136 @@ def update_current_sheet_flags(project):
             latest_sheet.is_current = True
             latest_sheet.save()
 
-          
-@shared_task
-def download_sheet_pdf(access_token, project_id, sheet_id, sheet_number, upload_file_name, sheet_db_id):
 
-    headers = {
-        "Authorization": f"Bearer {access_token}"
+def build_sheet_version_trackers(headers, project_id):
+
+    version_sets_response = requests.get(
+        f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
+        headers=headers
+    )
+
+    if version_sets_response.status_code != 200:
+        return None
+
+    version_sets_data = version_sets_response.json().get("results", [])
+
+    version_sets_map = {
+        version_set["id"]: version_set
+        for version_set in version_sets_data
     }
 
+    active_sheet_version_tracker = defaultdict(list)
+    deleted_sheet_version_tracker = defaultdict(list)
+
+    for version_set in version_sets_data:
+
+        version_set_id = version_set["id"]
+
+        version_sheets_response = requests.get(
+            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?filter[versionSetId]={version_set_id}",
+            headers=headers
+        )
+
+        if version_sheets_response.status_code != 200:
+            continue
+
+        version_sheets = version_sheets_response.json().get("results", [])
+
+        for version_sheet in version_sheets:
+
+            sheet_number = version_sheet["number"]
+
+            if version_set_id not in active_sheet_version_tracker[sheet_number]:
+                active_sheet_version_tracker[sheet_number].append(version_set_id)
+
+            if version_set_id not in deleted_sheet_version_tracker[sheet_number]:
+                deleted_sheet_version_tracker[sheet_number].append(version_set_id)
+
+    deleted_sheets_response = requests.get(
+        f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?isDeleted=true",
+        headers=headers
+    )
+
+    deleted_sheets_data = []
+
+    if deleted_sheets_response.status_code == 200:
+
+        deleted_sheets_data = deleted_sheets_response.json().get("results", [])
+
+        for deleted_sheet in deleted_sheets_data:
+
+            sheet_number = deleted_sheet["number"]
+            version_id = deleted_sheet["versionSet"]["id"]
+
+            if version_id not in version_sets_map:
+                version_sets_map[version_id] = deleted_sheet["versionSet"]
+
+            if version_id not in deleted_sheet_version_tracker[sheet_number]:
+                deleted_sheet_version_tracker[sheet_number].append(version_id)
+
+    deleted_sheet_version_number = {}
+
+    for sheet_number, versions in deleted_sheet_version_tracker.items():
+
+        ordered_versions = sorted(
+            versions,
+            key=lambda version_id: (
+                version_sets_map.get(version_id, {}).get("issuanceDate") or "",
+                version_sets_map.get(version_id, {}).get("createdAt") or "",
+                version_id
+            )
+        )
+
+        deleted_sheet_version_number[sheet_number] = {
+            version_id: index + 1
+            for index, version_id in enumerate(ordered_versions)
+        }
+
+    return {
+        "version_sets_map": version_sets_map,
+        "active_sheet_version_tracker": active_sheet_version_tracker,
+        "deleted_sheet_version_number": deleted_sheet_version_number,
+        "deleted_sheets_data": deleted_sheets_data,
+    }
+
+
+def update_create_autodesk_project_memebers(headers, project_id, project):
+    project_users_response = requests.get(
+        f"https://developer.api.autodesk.com/construction/admin/v1/projects/{project_id}/users",
+        headers=headers
+    )
+
+    project_users_data = project_users_response.json().get("results", [])
+
+    for project_user_data in project_users_data:
+
+        autodesk_user_obj, _ = AutodeskUser.objects.update_or_create(
+            autodesk_user_id=project_user_data.get("autodeskId"),
+            defaults={
+                "email":project_user_data.get("email"),
+                "name":project_user_data.get("name")
+            }
+        )
+
+        project_member_obj, _ = AutodeskProjectMembers.objects.update_or_create(
+            project = project,
+            autodesk_user = autodesk_user_obj,
+            defaults={
+                "email":project_user_data.get("email"),
+                "name":project_user_data.get("name"),
+                "phone":(project_user_data.get("phone", {}) or {}).get("number"),
+                "status":project_user_data.get("status"),
+                "company":project_user_data.get("companyName"),
+                "roles":project_user_data.get("roles"),
+                "access_levels":project_user_data.get("accessLevels"),
+                "added_on":parse_datetime(project_user_data.get("addedOn")),
+                "products":project_user_data.get("products")
+            }
+        )
+
+
+@shared_task
+def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_name, sheet_db_id):
     payload = {
         "sheets": [sheet_id],
         "options": {
@@ -131,7 +253,156 @@ def download_sheet_pdf(access_token, project_id, sheet_id, sheet_number, upload_
 
 
 @shared_task
-def get_hubs_projects_and_save(user_id):
+def download_project_file(headers, project_id, file_version_urn, file_db_id, file_name):
+
+    payload = {
+        "options": {
+            "outputFileName": file_name
+        },
+        "fileVersions": [
+            file_version_urn
+        ]
+    }
+
+    try:
+        export_response = requests.post(
+            f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports",
+            headers=headers,
+            json=payload
+        )
+
+        if export_response.status_code != 202:
+            print(
+                f"File export failed: {file_name} "
+                f"{export_response.status_code} "
+                f"{export_response.text}"
+            )
+            return
+
+        export_id = export_response.json()["id"]
+
+        download_url = None
+
+        for _ in range(12):
+            status_response = requests.get(
+                f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports/{export_id}",
+                headers=headers
+            )
+
+            status_data = status_response.json()
+
+            if status_data.get("status") == "successful":
+                download_url = (
+                    status_data
+                    .get("result", {})
+                    .get("output", {})
+                    .get("signedUrl")
+                )
+                break
+
+            time.sleep(5)
+
+        if not download_url:
+            print(f"Export timeout: {file_name}")
+            return
+
+        file_response = requests.get(download_url)
+
+        if file_response.status_code != 200:
+            print(f"Download failed: {file_name}")
+            return
+
+        file_obj = AutodeskProjectFiles.objects.get(
+            id=file_db_id
+        )
+
+        file_obj.file.save(
+            file_name,
+            ContentFile(file_response.content),
+            save=True
+        )
+
+        print(f"Saved file: {file_name}")
+
+    except Exception as e:
+        print(f"File download task failed: {e}")
+
+
+def update_create_project_files(headers, project_id, project, ):
+    # +++++++++++++++++++++++++++++++++++++++++++++++++++ STORE PDF FILES ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    top_folders_response = requests.get(
+        f"https://developer.api.autodesk.com/project/v1/hubs/b.3a470ff8-7c50-4178-832a-121d8316a07e/projects/{project_id}/topFolders",
+        headers=headers
+    )
+    top_folders_data = top_folders_response.json().get("data", [])
+    if not top_folders_data:
+        print(f"No top folders found for project: {project.name}")
+        return
+    top_folders_id = top_folders_data[0].get("id")
+    print("Project : ", project.name)
+    print("top_folders_id : ", top_folders_id)
+
+    supported_file_formats_response = requests.get(
+        f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{top_folders_id}/contents",
+        headers=headers
+    )
+    supported_file_formats_id = next(
+        (
+            folder.get("id")
+            for folder in supported_file_formats_response.json().get("data", [])
+            if "supported" in folder.get("attributes", {}).get("name", "").lower()
+        ),
+        None
+    )
+    print("supported_file_formats_id : ", supported_file_formats_id)
+
+    pdfs_response = requests.get(
+        f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{supported_file_formats_id}/contents",
+        headers=headers
+    )
+    pdf_folder_id = None
+    for folder in pdfs_response.json().get("data", []):
+        if folder.get("attributes", {}).get("name") == "PDFs":
+            pdf_folder_id = folder.get("id")
+            break
+    print("pdf_folder_id : ", pdf_folder_id)
+
+    files_response = requests.get(
+        f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{pdf_folder_id}/contents",
+        headers=headers
+    )
+    files_data = files_response.json().get("data", [])
+    datas = [
+        obj for obj in files_data
+        if obj.get("type") == "items"
+    ]
+
+    for data in datas:
+        attributes = data.get("attributes", {})
+        project_files, _ = AutodeskProjectFiles.objects.update_or_create(
+            file_id=data.get("id"),
+            project=project,
+            defaults={
+                "name":attributes.get("displayName"),
+                "version":attributes.get("extension", {}).get("version"),
+                "created_at":attributes.get("createTime"),
+                "created_by":attributes.get("createUserId"),
+                "created_by_name":attributes.get("createUserName"),
+                "updated_at":attributes.get("lastModifiedTime"),
+                "updated_by":attributes.get("lastModifiedUserId"),
+                "updated_by_name":attributes.get("lastModifiedUserName")
+            }
+        )
+        print("File Name : ", project_files.name)
+        
+        file_version_urn = (data.get("relationships", {}).get("tip", {}).get("data", {}).get("id"))
+        file_db_id = project_files.pk
+        file_name = project_files.name
+        download_project_file.delay(headers, project_id, file_version_urn, file_db_id, file_name)
+
+
+@shared_task
+def sync_autodesk_data(user_id):
     try:
         user = CustomUser.objects.get(id=user_id)
 
@@ -142,6 +413,7 @@ def get_hubs_projects_and_save(user_id):
         autodesk_user = AutodeskUser.objects.get(
             user=user
         )
+
         # +++++++++++++++++++++++++++++++++++++++++++++ storing hub +++++++++++++++++++++++++++++++++++++++++++++
         hubs_data = get_hubs(headers)
         for hub_data in hubs_data:        
@@ -172,133 +444,21 @@ def get_hubs_projects_and_save(user_id):
                     }
                 )
 
-                project_users_response = requests.get(
-                    f"https://developer.api.autodesk.com/construction/admin/v1/projects/{project_id}/users",
-                    headers=headers
-                )
+                # +++++++++++++++++++++++++++++++++++++++++++++ storing projects members +++++++++++++++++++++++++++++++++++++++++++++
+                update_create_autodesk_project_memebers(headers, project_id, project) 
 
-                project_users_data = project_users_response.json().get("results", [])
-
-                project_members = []
-                for project_user_data in project_users_data:
-                    # my_user = CustomUser.objects.update_or_create(
-                    #     email=project_user_data["email"],
-                    #     defaults={
-                    #         "name":project_user_data["name"],
-                    #         "password":project_user_data["name"],
-                    #         "password2":project_user_data["name"]
-                    #     }
-                    # ) 
-
-                    autodesk_user_obj, _ = AutodeskUser.objects.update_or_create(
-                        # user=my_user,
-                        autodesk_user_id=project_user_data.get("autodeskId"),
-                        defaults={
-                            # "autodesk_user_id":project_user_data.get("autodeskId"),
-                            "email":project_user_data.get("email"),
-                            "name":project_user_data.get("name")
-                        }
-                    )
-
-                    project_member_obj, _ = AutodeskProjectMembers.objects.update_or_create(
-                        project = project,
-                        autodesk_user = autodesk_user_obj,
-                        defaults={
-                            "email":project_user_data.get("email"),
-                            "name":project_user_data.get("name"),
-                            "phone":(project_user_data.get("phone", {}) or {}).get("number"),
-                            "status":project_user_data.get("status"),
-                            "company":project_user_data.get("companyName"),
-                            "roles":project_user_data.get("roles"),
-                            "access_levels":project_user_data.get("accessLevels"),
-                            "added_on":parse_datetime(project_user_data.get("addedOn")),
-                            "products":project_user_data.get("products")
-                        }
-                    )
-                    project_members.append(project_member_obj)
-                
-                project_name = project_data["attributes"]["name"]
-                count = project.members.count()
-                print("$" * 100)
-                print(f"Project : {project_name}, Members : {project_members}, Count : {count}")
-                print("$" * 100)
+                # +++++++++++++++++++++++++++++++++++++++++++++ storing projects files and data +++++++++++++++++++++++++++++++++++++++++++++
+                update_create_project_files(headers, project_id, project)               
                 
                 # ++++++++++++++++++++++++++++++++++++++++ version set map and version tracker +++++++++++++++++++++++++++++++++++++++
-                version_sets_response = requests.get(
-                    f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
-                    headers=headers
-                ) 
-                if version_sets_response.status_code != 200:
+                version_data = build_sheet_version_trackers(headers, project_id)
+                if not version_data:
                     continue
 
-                version_sets_data = version_sets_response.json().get("results", [])
-
-                version_sets_map = {
-                    version_set["id"]:version_set for version_set in version_sets_data
-                }
-
-                # for current sheets
-                active_sheet_version_tracker = defaultdict(list)
-
-                # for deleted sheets
-                deleted_sheet_version_tracker = defaultdict(list)
-                
-                for version_set in version_sets_data:
-                    version_set_id = version_set["id"]
-
-                    version_sheets_response = requests.get(
-                        f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?filter[versionSetId]={version_set_id}",
-                        headers=headers
-                    )
-                    if version_sheets_response.status_code != 200:
-                        continue
-
-                    version_sheets = version_sheets_response.json().get("results", [])
-
-                    for version_sheet in version_sheets:
-                        sheet_number = version_sheet["number"]
-
-                        # for active sheets
-                        if version_set_id not in active_sheet_version_tracker[sheet_number]:
-                            active_sheet_version_tracker[sheet_number].append(version_set_id)
-
-                        # for deleted sheets
-                        if version_set_id not in deleted_sheet_version_tracker[sheet_number]:
-                            deleted_sheet_version_tracker[sheet_number].append(version_set_id)
-
-                deleted_sheets_response = requests.get(
-                    f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?isDeleted=true",
-                    headers=headers
-                )
-                deleted_sheets_data = []
-                if deleted_sheets_response.status_code == 200:
-                    deleted_sheets_data = deleted_sheets_response.json().get("results", [])
-
-                    for deleted_sheet in deleted_sheets_data:
-                        sheet_number = deleted_sheet["number"]
-                        version_id = deleted_sheet["versionSet"]["id"]
-                        if version_id not in version_sets_map:
-                            version_sets_map[version_id] = deleted_sheet["versionSet"]
-
-                        # store deleted version sheet
-                        if version_id not in deleted_sheet_version_tracker[sheet_number]:
-                            deleted_sheet_version_tracker[sheet_number].append(version_id)
-                else:
-                    print(f"Skipping project {project_id}. Deleted sheets API returned {deleted_sheets_response.status_code}")
-
-                
-                deleted_sheet_version_number = {}
-                for sheet_number, versions in deleted_sheet_version_tracker.items():
-                    order_versions = sorted(versions, key=lambda version_id:(version_sets_map.get(version_id, {}).get("issuanceDate") or "",
-                            version_sets_map.get(version_id).get('createdAt') or "",
-                            version_id
-                        )
-                    )
-
-                    deleted_sheet_version_number[sheet_number] = {
-                        version_id: index + 1 for index, version_id in enumerate(order_versions)
-                    }                
-
+                version_sets_map = version_data["version_sets_map"]
+                active_sheet_version_tracker = version_data["active_sheet_version_tracker"]
+                deleted_sheet_version_number = version_data["deleted_sheet_version_number"]
+                deleted_sheets_data = version_data["deleted_sheets_data"]
 
                 # +++++++++++++++++++++++++++++++++++++++++++++ storing sheets +++++++++++++++++++++++++++++++++++++++++++++
                 sheets = requests.get(
@@ -341,24 +501,10 @@ def get_hubs_projects_and_save(user_id):
                     )
 
                     # +++++++++++++++++++++++++++++++++++++++++++++ storing sheet file +++++++++++++++++++++++++++++++++++++++++++++                   
-                    download_sheet_pdf.delay(user.access_token, project_id, sheet_id, sheet_data["number"], sheet_data["uploadFileName"], sheet_obj.id)
+                    download_sheet_pdf.delay(headers, project_id, sheet_id, sheet_data["number"], sheet_data["uploadFileName"], sheet_obj.id)
 
                               
                 # +++++++++++++++++++++++++++++++++++++++++++++++++++ STORE DELETED SHEETS DATA ++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                deleted_sheets = requests.get(
-                    f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?isDeleted=true",
-                    headers=headers
-                )
-
-                if deleted_sheets.status_code != 200:
-                    print(
-                        f"Skipping project {project_id}. "
-                        f"Sheets API returned {sheets.status_code}"
-                    )   
-                    continue
-
-                deleted_sheets_data = deleted_sheets.json().get('results', [])               
-
                 for deleted_sheet_data in deleted_sheets_data:
                     version_id = deleted_sheet_data["versionSet"]["id"]       
                     sheet_number = deleted_sheet_data["number"]             
@@ -387,10 +533,10 @@ def get_hubs_projects_and_save(user_id):
                         }
                     )
 
-                print("\n" + "=" * 100)
-                
-                update_current_sheet_flags(project)
 
+                # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ updates -> latest updated sheet is current if multiple ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                update_current_sheet_flags(project)
+        
         return {"status": "success"}
 
     except AutodeskAccount.DoesNotExist:
