@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import AutodeskSheets, AutoDeskProject, AutodeskProjectMembers
+from .models import AutodeskSheets, AutoDeskProject, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions
 
 
 class AutodeskSheetsSerializer(serializers.ModelSerializer):
@@ -20,3 +20,9 @@ class AutodeskProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = AutoDeskProject
         fields = ["id", "project_id", "name", "account", "hub_name", "hub_id", "members", "created_at"]
+
+
+class AutodeskFileVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AutodeskFileVersions
+        fields = "__all__"

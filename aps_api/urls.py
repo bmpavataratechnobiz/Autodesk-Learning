@@ -8,4 +8,6 @@ urlpatterns = [
     path("deleted_sheets/", views.DeletedSheets.as_view(), name="deleted_sheets"),
     path("users_by_project/<str:project_id>/", views.FetchUsersByProject.as_view(), name="users_by_project"),
     path("get_sheets/", views.GetSheets.as_view(), name="get_sheets"),
+    path("get_file_versions/<str:file_id>/", views.GetFileVersions.as_view(), name="get_file_versions"),
+    path("fetch_file_versions/<str:item_id>/", views.FetchFileVersions.as_view(),name="fetch_file_versions"),
 ]

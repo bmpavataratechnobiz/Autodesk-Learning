@@ -1,5 +1,6 @@
+from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders
 
 
 
@@ -48,10 +49,47 @@ class AutodeskProjectMembersAdmin(admin.ModelAdmin):
     list_display_links = ['project', 'autodesk_user', 'status', 'added_on']
 
 
+class AutodeskFileVersionsInline(admin.TabularInline):
+    model = AutodeskFileVersions
+    fields = ["name", "version", "created_at", "updated_at"]
+    extra = 0
+
+
+class AutodeskProjectFilesAdminForm(forms.ModelForm):
+    class Meta:
+        model = AutodeskProjectFiles
+        fields = "__all__"
+        widgets = {
+            "item_id": forms.TextInput(attrs={
+                "size": 100,
+                "style": "width: 800px;"
+            }),
+            "current_file_id": forms.TextInput(attrs={
+                "size": 100,
+                "style": "width: 800px;"
+            }),
+        }
+
+
 class AutodeskProjectFilesAdmin(admin.ModelAdmin):
+    form = AutodeskProjectFilesAdminForm
+    inlines = [AutodeskFileVersionsInline]
     model = AutodeskProjectFiles
-    list_display = ["file_id", "version", "created_by_name", "updated_by_name"]
-    list_display_links = ["file_id", "version", "created_by_name", "updated_by_name"]
+    list_display = ["id", "name", "version", "version_number", "created_at", "updated_at"]
+    list_display_links = ["id", "name", "version", "version_number", "created_at", "updated_at"]
+
+
+class AutodeskFileVersionsAdmin(admin.ModelAdmin):
+    model = AutodeskFileVersions
+    list_display =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+    list_display_links =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+
+
+
+class AutodeskFoldersAdmin(admin.ModelAdmin):
+    model = AutodeskFolders
+    list_display = ["id", "is_root", "name", "parent", "object_count"]
+    list_display_links = ["id", "is_root", "name", "parent", "object_count"]
 
 
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
@@ -61,3 +99,5 @@ admin.site.register(AutodeskSheets, AutodeskSheetsAdmin)
 admin.site.register(AutodeskVersionSet, AutodeskVersionSetAdmin)
 admin.site.register(AutodeskProjectMembers, AutodeskProjectMembersAdmin)
 admin.site.register(AutodeskProjectFiles, AutodeskProjectFilesAdmin)
+admin.site.register(AutodeskFileVersions, AutodeskFileVersionsAdmin)
+admin.site.register(AutodeskFolders, AutodeskFoldersAdmin)

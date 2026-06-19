@@ -3,10 +3,10 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from .tasks import sync_autodesk_data
 # from .tasks2 import sync_autodesk_data
-from .models import AutoDeskProject, AutodeskSheets, AutodeskUser, AutodeskAccount
+from .models import AutoDeskProject, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles
 from rest_framework.response import Response
 from rest_framework import status 
-from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer
+from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer, AutodeskFileVersionSerializer
 
 
 
@@ -32,7 +32,7 @@ class FetchSheets(APIView):
             is_deleted=False
         )
         serializer = AutodeskSheetsSerializer(sheets, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({"objects":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
     
     
 
@@ -98,3 +98,36 @@ class GetSheets(APIView):
         )        
         serializer = AutodeskSheetsSerializer(sheets, many=True)
         return Response({"objects" : len(serializer.data), "results": serializer.data}, status=status.HTTP_200_OK)
+    
+
+
+class GetFileVersions(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, file_id):
+        file = AutodeskProjectFiles.objects.get(
+            id=file_id
+        )
+
+        file_versions = AutodeskFileVersions.objects.filter(
+            autodesk_project_file=file
+        )
+        serializer = AutodeskFileVersionSerializer(file_versions, many=True)
+        return Response({"objects":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
+    
+
+
+
+class FetchFileVersions(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, item_id):
+        file = AutodeskProjectFiles.objects.get(
+            item_id=item_id
+        )
+
+        file_versions = AutodeskFileVersions.objects.filter(
+            autodesk_project_file=file
+        )
+        serializer = AutodeskFileVersionSerializer(file_versions, many=True)
+        return Response({"objects":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
