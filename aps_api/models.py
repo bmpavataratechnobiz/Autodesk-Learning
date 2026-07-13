@@ -134,6 +134,7 @@ class AutodeskProjectFiles(models.Model):
     current_file_id = models.CharField(max_length=255, blank=True, null=True)
     file = models.FileField(upload_to="autodesk_pdf_files/", blank=True, null=True)
     file_size_bytes = models.BigIntegerField(blank=True, null=True)
+    is_deleted = models.BooleanField(blank=True, null=True)
 
     createdat = models.DateTimeField(auto_now_add=True, blank=True, null=True)
     updatedat = models.DateTimeField(auto_now=True, blank=True, null=True)
@@ -196,4 +197,18 @@ class AutodeskFolders(models.Model):
 
 
 
+class AutodeskFolderMembers(models.Model):
+    folder = models.ForeignKey(AutodeskFolders, on_delete=models.CASCADE, related_name="folder_members")
+    autodesk_user = models.ForeignKey(AutodeskUser, on_delete=models.CASCADE, related_name="folder_users")
+    subject_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    email = models.EmailField()
+    user_type = models.CharField(max_length=255)
+    subject_status = models.CharField(max_length=255)
+    subject_type = models.CharField(max_length=255)
+    actions = models.JSONField(blank=True, null=True)
+    inherit_actions = models.JSONField(blank=True, null=True)
+
+    def __str__(self):
+        return self.name
 

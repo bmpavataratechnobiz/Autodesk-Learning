@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers
 
 
 
@@ -75,21 +75,36 @@ class AutodeskProjectFilesAdmin(admin.ModelAdmin):
     form = AutodeskProjectFilesAdminForm
     inlines = [AutodeskFileVersionsInline]
     model = AutodeskProjectFiles
-    list_display = ["id", "name", "version", "version_number", "created_at", "updated_at"]
-    list_display_links = ["id", "name", "version", "version_number", "created_at", "updated_at"]
+    list_display = ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+    list_display_links = ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
 
 
 class AutodeskFileVersionsAdmin(admin.ModelAdmin):
     model = AutodeskFileVersions
     list_display =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
     list_display_links =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+    list_filter = ["name", "is_deleted"]
 
+
+class AutodeskFolderMembersInline(admin.TabularInline):
+    model = AutodeskFolderMembers
+    fields = ['autodesk_user', 'name', "subject_status"]
+    extra = 0
 
 
 class AutodeskFoldersAdmin(admin.ModelAdmin):
+    inlines = [AutodeskFolderMembersInline]
     model = AutodeskFolders
     list_display = ["id", "is_root", "name", "parent", "object_count"]
     list_display_links = ["id", "is_root", "name", "parent", "object_count"]
+
+
+class AutodeskFolderMembersAdmin(admin.ModelAdmin):
+    model = AutodeskFolderMembers
+    list_display = ["id", "folder", "autodesk_user", "name"]
+    list_display_links = ["id", "folder", "autodesk_user", "name"]
+    list_filter = ["autodesk_user", "name"]
+
 
 
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
@@ -101,3 +116,4 @@ admin.site.register(AutodeskProjectMembers, AutodeskProjectMembersAdmin)
 admin.site.register(AutodeskProjectFiles, AutodeskProjectFilesAdmin)
 admin.site.register(AutodeskFileVersions, AutodeskFileVersionsAdmin)
 admin.site.register(AutodeskFolders, AutodeskFoldersAdmin)
+admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
