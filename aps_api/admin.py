@@ -13,8 +13,8 @@ class AutodeskUserAdmin(admin.ModelAdmin):
 
 class AutodeskSheetsAdmin(admin.ModelAdmin):
     model = AutodeskSheets
-    list_display = ['id', 'sheetId', 'sheetNumber','version', 'versionSet', 'is_current', 'is_deleted']
-    list_display_links = ['id', 'sheetId', 'sheetNumber', 'version', 'versionSet']
+    list_display = ['id', 'sheetId', 'title', 'sheetNumber','version', 'versionSet', 'is_current', 'is_deleted']
+    list_display_links = ['id', 'sheetId', 'title', 'sheetNumber', 'version', 'versionSet']
     # list_editable = ['file']
 
 

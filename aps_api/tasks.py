@@ -64,7 +64,6 @@ def update_current_sheet_flags(project):
 
 
 def build_sheet_version_trackers(headers, project_id):
-
     version_sets_response = requests.get(
         f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
         headers=headers
@@ -74,12 +73,6 @@ def build_sheet_version_trackers(headers, project_id):
         return None
 
     version_sets_data = version_sets_response.json().get("results", [])
-    for version_set in version_sets_data:
-        print(
-            version_set["name"],
-            version_set.get("issuanceDate"),
-            version_set.get("createdAt")
-        )
 
     version_sets_map = {
         version_set["id"]: version_set
@@ -123,6 +116,13 @@ def build_sheet_version_trackers(headers, project_id):
     if deleted_sheets_response.status_code == 200:
 
         deleted_sheets_data = deleted_sheets_response.json().get("results", [])
+        print("Deleted sheets returned:", len(deleted_sheets_data))
+
+        for sheet in deleted_sheets_data:
+            if sheet["number"] == "E101":
+                print("FOUND E101")
+                print(sheet["versionSet"]["id"])
+                print(sheet["versionSet"]["name"])
 
         for deleted_sheet in deleted_sheets_data:
 
@@ -152,7 +152,10 @@ def build_sheet_version_trackers(headers, project_id):
             version_id: index + 1
             for index, version_id in enumerate(ordered_versions)
         }
-
+    print(
+        "E101 in deleted tracker:",
+        deleted_sheet_version_number.get("E101")
+    )
     return {
         "version_sets_map": version_sets_map,
         "active_sheet_version_tracker": active_sheet_version_tracker,
@@ -757,18 +760,6 @@ def sync_autodesk_data(user_id):
                 deleted_sheet_version_number = version_data["deleted_sheet_version_number"]
                 deleted_sheets_data = version_data["deleted_sheets_data"]
 
-                print("Active keys:", active_sheet_version_tracker.keys())
-                print("Deleted keys:", deleted_sheet_version_number.keys())
-
-                print("E101 in active:", "E101" in active_sheet_version_tracker)
-                print("E101 in deleted:", "E101" in deleted_sheet_version_number)
-
-                for vid in active_sheet_version_tracker["E101"]:
-                    print(
-                        version_sets_map[vid]["name"],
-                        version_sets_map[vid].get("issuanceDate")
-                    )
-
                 # +++++++++++++++++++++++++++++++++++++++++++++ storing sheets +++++++++++++++++++++++++++++++++++++++++++++
                 sheets = requests.get(
                     f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets",
@@ -790,6 +781,15 @@ def sync_autodesk_data(user_id):
                     version = len(active_sheet_version_tracker.get(sheet_number, {}))
                     version_set = get_or_create_versionSet(version_sets_map, version_id)
 
+                    if sheet_number == "E101":
+                        print("\n========== ACTIVE E101 ==========")
+                        print("Sheet Number :", sheet_number)
+                        print("Version Set ID :", version_id)
+                        print("Version Set Name :", version_set.name if version_set else None)
+                        print("Calculated Version :", version)
+                        print("Tracker :", active_sheet_version_tracker.get(sheet_number))
+                        print("=================================\n")
+
                     sheet_obj, _ = AutodeskSheets.objects.update_or_create(
                         sheetId=sheet_data["id"],
                         sheetNumber=sheet_number,
@@ -808,7 +808,6 @@ def sync_autodesk_data(user_id):
                             "is_current":sheet_data.get("isCurrent"),                           
                         }
                     )
-
                     # +++++++++++++++++++++++++++++++++++++++++++++ storing sheet file +++++++++++++++++++++++++++++++++++++++++++++                   
                     download_sheet_pdf.delay(headers, project_id, sheet_id, sheet_data["number"], sheet_data["uploadFileName"], sheet_obj.id)
 
@@ -819,6 +818,15 @@ def sync_autodesk_data(user_id):
                     sheet_number = deleted_sheet_data["number"]             
                     version_set = get_or_create_versionSet(version_sets_map, version_id)
                     version = deleted_sheet_version_number.get(sheet_number, {}).get(version_id, 0)
+
+                    if sheet_number == "E101":
+                        print("\n========== DELETED E101 ==========")
+                        print("Sheet Number :", sheet_number)
+                        print("Version Set ID :", version_id)
+                        print("Version Set Name :", version_set.name if version_set else None)
+                        print("Calculated Version :", version)
+                        print("Tracker :", deleted_sheet_version_number.get(sheet_number))
+                        print("==================================\n")
 
                     sheet_obj, _ = AutodeskSheets.objects.update_or_create(
                         sheetId=deleted_sheet_data["id"],
@@ -841,7 +849,6 @@ def sync_autodesk_data(user_id):
                             "deletedByName":deleted_sheet_data["deletedByName"],                            
                         }
                     )
-
 
                 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ updates -> latest updated sheet is current if multiple ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
                 update_current_sheet_flags(project)
