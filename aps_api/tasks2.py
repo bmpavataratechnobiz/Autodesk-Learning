@@ -155,16 +155,6 @@ def build_sheet_version_ranks(headers, project_id):
             if not number:
                 continue
 
-            if number == "P101":
-                print(
-                    f"\nFOUND P101"
-                    f"\nSheet ID      : {sheet.get('id')}"
-                    f"\nVersion Set   : {version_set_id}"
-                    f"\nVersion Name  : {version_set.get('name')}"
-                    f"\nIssuance Date : {vs_info.get('issuance_date')}"
-                    f"\nCreated At    : {vs_info.get('created_at')}"
-                )
-
             sheet_versions.setdefault(number, []).append(
                 {
                     "sheet_id": sheet.get("id"),
@@ -179,11 +169,6 @@ def build_sheet_version_ranks(headers, project_id):
 
     for number, versions in sheet_versions.items():
 
-        if number == "P101":
-            print("\n================ BEFORE SORT ================")
-            for v in versions:
-                print(v)
-
         versions.sort(
             key=lambda x: (
                 datetime.strptime(
@@ -195,25 +180,12 @@ def build_sheet_version_ranks(headers, project_id):
             )
         )
 
-        if number == "P101":
-            print("\n================ AFTER SORT ================")
-            for i, v in enumerate(versions, start=1):
-                print(f"Rank {i}: {v}")
-
         for index, version in enumerate(versions, start=1):
 
             result[version["sheet_id"]] = {
                 "rank": index,
                 "version_set_id": version["version_set_id"],
             }
-
-            if number == "P101":
-                print(
-                    f"Assigned Rank {index}"
-                    f" | Sheet ID: {version['sheet_id']}"
-                    f" | Version Set: {version['version_set_name']}"
-                    f" | Issuance: {version['issuance_date']}"
-                )
 
     return result
 

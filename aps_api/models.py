@@ -171,25 +171,18 @@ class AutodeskFileVersions(models.Model):
 
 class AutodeskFolders(models.Model):
     project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE, related_name="folders")
-
     folder_id = models.CharField(max_length=255)
-
     parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
-
     name = models.CharField(max_length=255)
-
     is_root = models.BooleanField(default=False)
     hidden = models.BooleanField(default=False)
     object_count = models.IntegerField(default=0)
-
     created_at = models.DateTimeField(null=True, blank=True)
     created_by = models.CharField(max_length=255, null=True, blank=True)
     created_by_name = models.CharField(max_length=255, null=True, blank=True)
-
     updated_at = models.DateTimeField(null=True, blank=True)
     updated_by = models.CharField(max_length=255, null=True, blank=True)
     updated_by_name = models.CharField(max_length=255, null=True, blank=True)
-
 
     def __str__(self):
         return self.name
@@ -212,3 +205,14 @@ class AutodeskFolderMembers(models.Model):
     def __str__(self):
         return self.name
 
+
+
+class SyncFolderData(models.Model):
+    project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE)
+    folder_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    path = models.CharField(max_length=255, blank=True, null=True)
+    last_sync_time = models.DateTimeField(blank=True, null=True)
+
+    def __str__(self):
+        return self.name

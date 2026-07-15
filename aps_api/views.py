@@ -1,9 +1,11 @@
+import requests  # type:ignore
 from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-# from .tasks import sync_autodesk_data
-from .tasks2 import sync_autodesk_data
-from .models import AutoDeskProject, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles
+from .tasks import sync_autodesk_data, sync_selected_folders
+# from .tasks2 import sync_autodesk_data
+from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, SyncFolderData
+from django_accounts.models import CustomUser
 from rest_framework.response import Response
 from rest_framework import status 
 from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer, AutodeskFileVersionSerializer
@@ -131,3 +133,172 @@ class FetchFileVersions(APIView):
         )
         serializer = AutodeskFileVersionSerializer(file_versions, many=True)
         return Response({"objects":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
+
+
+# ********************************************* 
+
+def fetch(request):
+    return render(request, "fetchhhh.html") 
+
+
+class FetchRegions(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = CustomUser.objects.get(email=request.user.email)
+
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+
+        hubs_response = requests.get(
+            f"https://developer.api.autodesk.com/project/v1/hubs",
+            headers=headers
+        )
+
+        if hubs_response.status_code != 200:
+            return Response(hubs_response.json(), hubs_response.status_code)
+
+        hubs_data = hubs_response.json().get("data", [])
+
+        regions = [hub_data["attributes"]["region"] for hub_data in hubs_data ]
+
+        return Response({"Objects":len(regions), "results":regions}, hubs_response.status_code)
+
+
+
+class FetchHubs(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, region):
+
+        user = CustomUser.objects.get(email=request.user.email)
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+
+        hubs_response = requests.get(
+            f"https://developer.api.autodesk.com/project/v1/hubs",
+            headers=headers
+        )  
+
+        if hubs_response.status_code != 200:
+            return Response(hubs_response.json(), hubs_response.status_code) 
+
+        hubs_data = hubs_response.json().get("data", [])
+
+        hubs = []
+        for hub_data in hubs_data:
+            if hub_data["attributes"]["region"] == region.upper():
+                hubs.append(hub_data)
+
+        return Response({"Objects":len(hubs), "results":hubs}, status=hubs_response.status_code)
+
+
+class FetchProjects(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, hub_id):
+        user = CustomUser.objects.get(email=request.user.email)
+
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+
+        projects_response = requests.get(
+            f"https://developer.api.autodesk.com/project/v1/hubs/{hub_id}/projects",
+            headers=headers
+        )
+
+        if projects_response.status_code != 200:
+            return Response(projects_response.json(), projects_response.status_code)
+        
+        projects_data = projects_response.json().get("data", [])
+        return Response({"objects":len(projects_data), "results":projects_data}, projects_response.status_code)
+    
+
+class FetchTopFolders(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, hub_id, project_id):
+        user = CustomUser.objects.get(email=request.user.email)
+
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+
+        top_folders_response = requests.get(
+            f"https://developer.api.autodesk.com/project/v1/hubs/{hub_id}/projects/{project_id}/topFolders",
+            headers=headers
+        )
+
+        if top_folders_response.status_code != 200:
+            return Response(top_folders_response.json(), top_folders_response.status_code)
+
+        top_folders_data = top_folders_response.json().get("data", [])
+
+        return Response({"objects":len(top_folders_data), "results":top_folders_data}, top_folders_response.status_code)
+    
+
+class FetchSubFolders(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, project_id, folder_id):
+        user = CustomUser.objects.get(email=request.user.email)
+
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+
+        url = (
+            f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder_id}/contents?filter[type]=folders"
+        )
+
+        all_sub_folders = []
+
+        while url:
+            response = requests.get(
+                url,
+                headers=headers
+            ) 
+
+            if response.status_code != 200:
+                return Response(response.json(), response.status_code)
+            
+            response_data = response.json()
+
+            all_sub_folders.extend(response_data.get("data", []))
+
+            url = response_data.get("links", {}).get("next", {}).get("href")
+
+        all_sub_folders.sort(
+            key=lambda x: (
+                x.get("attributes", {}).get("displayName")
+                or x.get("attributes", {}).get("name", "")
+            ).lower()
+        )        
+
+        return Response({"objects":len(all_sub_folders), "results":all_sub_folders}, status=status.HTTP_200_OK)
+    
+
+class SyncFoldersData(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+
+        project = AutoDeskProject.objects.get(
+            project_id=project_id
+        )
+
+        folders = request.data.get("folders", [])
+
+        sync_selected_folders.delay(
+            request.user.id,
+            project.project_id,
+            folders
+        )
+
+        return Response(
+            {"message": "Folder sync has been started."},
+            status=status.HTTP_202_ACCEPTED
+        )

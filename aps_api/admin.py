@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
 
 
 
@@ -107,6 +107,13 @@ class AutodeskFolderMembersAdmin(admin.ModelAdmin):
 
 
 
+class SyncFolderDataAdmin(admin.ModelAdmin):
+    model = SyncFolderData
+    list_display = ["id", "project", "name"]
+    list_display_links = ["id", "project", "name"]
+
+
+
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
 admin.site.register(AutodeskAccount, AutodeskAccountAdmin)
 admin.site.register(AutoDeskProject, AutodeskProjectAdmin)
@@ -117,3 +124,4 @@ admin.site.register(AutodeskProjectFiles, AutodeskProjectFilesAdmin)
 admin.site.register(AutodeskFileVersions, AutodeskFileVersionsAdmin)
 admin.site.register(AutodeskFolders, AutodeskFoldersAdmin)
 admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
+admin.site.register(SyncFolderData, SyncFolderDataAdmin)

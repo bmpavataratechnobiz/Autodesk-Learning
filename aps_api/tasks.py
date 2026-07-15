@@ -1,12 +1,14 @@
 import requests #type:ignore
 from django.conf import settings
-from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers
+from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
 from collections import defaultdict
 from django.utils.dateparse import parse_datetime
 from django_accounts.models import CustomUser
+from datetime import datetime
+from django.utils import timezone
 
 
 APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
@@ -63,105 +65,130 @@ def update_current_sheet_flags(project):
             latest_sheet.save()
 
 
-def build_sheet_version_trackers(headers, project_id):
+def build_sheet_version_counts(headers, project_id):
     version_sets_response = requests.get(
         f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
-        headers=headers
+        headers=headers,
     )
 
     if version_sets_response.status_code != 200:
-        return None
+        return {}
 
-    version_sets_data = version_sets_response.json().get("results", [])
+    version_sets = version_sets_response.json().get("results", [])
 
-    version_sets_map = {
-        version_set["id"]: version_set
-        for version_set in version_sets_data
-    }
+    sheet_versions = {}
 
-    active_sheet_version_tracker = defaultdict(list)
-    deleted_sheet_version_tracker = defaultdict(list)
+    for version_set in version_sets:
+        version_set_id = version_set.get("id")
 
-    for version_set in version_sets_data:
-
-        version_set_id = version_set["id"]
-
-        version_sheets_response = requests.get(
-            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?filter[versionSetId]={version_set_id}",
-            headers=headers
-        )
-
-        if version_sheets_response.status_code != 200:
+        if not version_set_id:
             continue
 
-        version_sheets = version_sheets_response.json().get("results", [])
+        response = requests.get(
+            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets"
+            f"?filter[versionSetId]={version_set_id}",
+            headers=headers,
+        )
 
-        for version_sheet in version_sheets:
+        if response.status_code != 200:
+            continue
 
-            sheet_number = version_sheet["number"]
+        for sheet in response.json().get("results", []):
 
-            if version_set_id not in active_sheet_version_tracker[sheet_number]:
-                active_sheet_version_tracker[sheet_number].append(version_set_id)
+            number = sheet.get("number")
 
-            if version_set_id not in deleted_sheet_version_tracker[sheet_number]:
-                deleted_sheet_version_tracker[sheet_number].append(version_set_id)
+            if not number:
+                continue
 
-    deleted_sheets_response = requests.get(
-        f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?isDeleted=true",
-        headers=headers
+            sheet_versions.setdefault(number, set()).add(version_set_id)
+
+    return {
+        sheet_number: len(version_ids)
+        for sheet_number, version_ids in sheet_versions.items()
+    }
+
+
+
+def build_sheet_version_ranks(headers, project_id):
+
+    version_sets_response = requests.get(
+        f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
+        headers=headers,
     )
 
-    deleted_sheets_data = []
+    if version_sets_response.status_code != 200:
+        return {}
 
-    if deleted_sheets_response.status_code == 200:
+    version_sets = version_sets_response.json().get("results", [])
 
-        deleted_sheets_data = deleted_sheets_response.json().get("results", [])
-        print("Deleted sheets returned:", len(deleted_sheets_data))
+    version_set_lookup = {
+        version_set["id"]: {
+            "issuance_date": version_set.get("issuanceDate"),
+            "created_at": version_set.get("createdAt"),
+        }
+        for version_set in version_sets
+    }
 
-        for sheet in deleted_sheets_data:
-            if sheet["number"] == "E101":
-                print("FOUND E101")
-                print(sheet["versionSet"]["id"])
-                print(sheet["versionSet"]["name"])
+    sheet_versions = {}
 
-        for deleted_sheet in deleted_sheets_data:
+    for version_set in version_sets:
 
-            sheet_number = deleted_sheet["number"]
-            version_id = deleted_sheet["versionSet"]["id"]
+        version_set_id = version_set.get("id")
 
-            if version_id not in version_sets_map:
-                version_sets_map[version_id] = deleted_sheet["versionSet"]
+        if not version_set_id:
+            continue
 
-            if version_id not in deleted_sheet_version_tracker[sheet_number]:
-                deleted_sheet_version_tracker[sheet_number].append(version_id)
+        response = requests.get(
+            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets"
+            f"?filter[versionSetId]={version_set_id}",
+            headers=headers,
+        )
 
-    deleted_sheet_version_number = {}
+        if response.status_code != 200:
+            continue
 
-    for sheet_number, versions in deleted_sheet_version_tracker.items():
+        vs_info = version_set_lookup[version_set_id]
 
-        ordered_versions = sorted(
-            versions,
-            key=lambda version_id: (
-                version_sets_map.get(version_id, {}).get("issuanceDate") or "",
-                version_sets_map.get(version_id, {}).get("createdAt") or "",
-                version_id
+        for sheet in response.json().get("results", []):
+
+            number = sheet.get("number")
+
+            if not number:
+                continue
+
+            sheet_versions.setdefault(number, []).append(
+                {
+                    "sheet_id": sheet.get("id"),
+                    "version_set_id": version_set_id,
+                    "version_set_name": version_set.get("name"),
+                    "issuance_date": vs_info.get("issuance_date"),
+                    "created_at": vs_info.get("created_at"),
+                }
+            )
+
+    result = {}
+
+    for number, versions in sheet_versions.items():
+
+        versions.sort(
+            key=lambda x: (
+                datetime.strptime(
+                    x["issuance_date"], "%Y-%m-%d"
+                ) if x.get("issuance_date") else datetime.min,
+                datetime.fromisoformat(
+                    x["created_at"].replace("Z", "+00:00")
+                ) if x.get("created_at") else datetime.min,
             )
         )
 
-        deleted_sheet_version_number[sheet_number] = {
-            version_id: index + 1
-            for index, version_id in enumerate(ordered_versions)
-        }
-    print(
-        "E101 in deleted tracker:",
-        deleted_sheet_version_number.get("E101")
-    )
-    return {
-        "version_sets_map": version_sets_map,
-        "active_sheet_version_tracker": active_sheet_version_tracker,
-        "deleted_sheet_version_number": deleted_sheet_version_number,
-        "deleted_sheets_data": deleted_sheets_data,
-    }
+        for index, version in enumerate(versions, start=1):
+
+            result[version["sheet_id"]] = {
+                "rank": index,
+                "version_set_id": version["version_set_id"],
+            }
+
+    return result
 
 
 def update_create_autodesk_project_memebers(headers, project_id, project):
@@ -698,6 +725,7 @@ def update_create_project_files(headers, project_id, project):
             download_project_file.delay(headers, project_id, file_version_urn, file_db_id, file_name, model_type)
 
 
+# *********************************************************** MAIN FUNCTION ***********************************************************
 @shared_task
 def sync_autodesk_data(user_id):
     try:
@@ -751,14 +779,39 @@ def sync_autodesk_data(user_id):
                 # update_create_project_files(headers, project_id, project)               
                 
                 # ++++++++++++++++++++++++++++++++++++++++ version set map and version tracker +++++++++++++++++++++++++++++++++++++++
-                version_data = build_sheet_version_trackers(headers, project_id)
-                if not version_data:
+                version_sets_response = requests.get(
+                    f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/version-sets",
+                    headers=headers
+                )
+
+                if version_sets_response.status_code != 200:
                     continue
 
-                version_sets_map = version_data["version_sets_map"]
-                active_sheet_version_tracker = version_data["active_sheet_version_tracker"]
-                deleted_sheet_version_number = version_data["deleted_sheet_version_number"]
-                deleted_sheets_data = version_data["deleted_sheets_data"]
+                version_sets_data = version_sets_response.json().get("results", [])
+
+                version_sets_map = {
+                    version_set["id"]: version_set
+                    for version_set in version_sets_data
+                }
+
+                version_counts = build_sheet_version_counts(headers, project_id)
+                version_ranks = build_sheet_version_ranks(headers, project_id)
+
+                deleted_sheets_response = requests.get(
+                    f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/sheets?isDeleted=true",
+                    headers=headers
+                )
+
+                deleted_sheets_data = []
+
+                if deleted_sheets_response.status_code == 200:
+                    deleted_sheets_data = deleted_sheets_response.json().get("results", [])
+
+                    for sheet in deleted_sheets_data:
+                        version_id = sheet["versionSet"]["id"]
+
+                        if version_id not in version_sets_map:
+                            version_sets_map[version_id] = sheet["versionSet"]
 
                 # +++++++++++++++++++++++++++++++++++++++++++++ storing sheets +++++++++++++++++++++++++++++++++++++++++++++
                 sheets = requests.get(
@@ -778,17 +831,7 @@ def sync_autodesk_data(user_id):
                     sheet_id = sheet_data["id"]
                     version_id = sheet_data["versionSet"]["id"]
                     sheet_number = sheet_data["number"]    
-                    version = len(active_sheet_version_tracker.get(sheet_number, {}))
                     version_set = get_or_create_versionSet(version_sets_map, version_id)
-
-                    if sheet_number == "E101":
-                        print("\n========== ACTIVE E101 ==========")
-                        print("Sheet Number :", sheet_number)
-                        print("Version Set ID :", version_id)
-                        print("Version Set Name :", version_set.name if version_set else None)
-                        print("Calculated Version :", version)
-                        print("Tracker :", active_sheet_version_tracker.get(sheet_number))
-                        print("=================================\n")
 
                     sheet_obj, _ = AutodeskSheets.objects.update_or_create(
                         sheetId=sheet_data["id"],
@@ -797,7 +840,7 @@ def sync_autodesk_data(user_id):
                             "project":project,
                             "title":sheet_data["title"],
                             "versionSet":version_set,
-                            "version":version,
+                            "version":0,
                             "createdAt":sheet_data["createdAt"],
                             "createdBy":sheet_data["createdBy"],
                             "createdByName":sheet_data["createdByName"],
@@ -814,19 +857,9 @@ def sync_autodesk_data(user_id):
                               
                 # +++++++++++++++++++++++++++++++++++++++++++++++++++ STORE DELETED SHEETS DATA ++++++++++++++++++++++++++++++++++++++++++++++++++++++
                 for deleted_sheet_data in deleted_sheets_data:
-                    version_id = deleted_sheet_data["versionSet"]["id"]       
-                    sheet_number = deleted_sheet_data["number"]             
+                    sheet_id = deleted_sheet_data["id"]
+                    version_id = deleted_sheet_data["versionSet"]["id"]
                     version_set = get_or_create_versionSet(version_sets_map, version_id)
-                    version = deleted_sheet_version_number.get(sheet_number, {}).get(version_id, 0)
-
-                    if sheet_number == "E101":
-                        print("\n========== DELETED E101 ==========")
-                        print("Sheet Number :", sheet_number)
-                        print("Version Set ID :", version_id)
-                        print("Version Set Name :", version_set.name if version_set else None)
-                        print("Calculated Version :", version)
-                        print("Tracker :", deleted_sheet_version_number.get(sheet_number))
-                        print("==================================\n")
 
                     sheet_obj, _ = AutodeskSheets.objects.update_or_create(
                         sheetId=deleted_sheet_data["id"],
@@ -835,7 +868,7 @@ def sync_autodesk_data(user_id):
                             "title":deleted_sheet_data["title"],
                             "sheetNumber":deleted_sheet_data["number"],
                             "versionSet":version_set,
-                            "version":version,
+                            "version":0,
                             "createdAt":deleted_sheet_data.get("createdAt", None),
                             "createdBy":deleted_sheet_data.get("createdBy", None),
                             "createdByName":deleted_sheet_data.get("createdByName", None),
@@ -850,6 +883,43 @@ def sync_autodesk_data(user_id):
                         }
                     )
 
+                # +++++++++++++++++++++++++++++++++++++++++++++ UPDATE VERSION COUNTS +++++++++++++++++++++++++++++++++++++++++++++
+                for sheet_number, count in version_counts.items():
+
+                    AutodeskSheets.objects.filter(
+                        project=project,
+                        sheetNumber=sheet_number,
+                        is_current=True,
+                    ).update(
+                        version=count
+                    )
+
+
+                # +++++++++++++++++++++++++++++++++++++++++++++ UPDATE VERSION RANKS +++++++++++++++++++++++++++++++++++++++++++++
+                for sheet_id, data in version_ranks.items():
+
+                    sheet = AutodeskSheets.objects.filter(
+                        project=project,
+                        sheetId=sheet_id,
+                    ).first()
+
+                    if not sheet:
+                        continue
+
+                    sheet.version = data["rank"]
+
+                    sheet.versionSet = get_or_create_versionSet(
+                        version_sets_map,
+                        data["version_set_id"],
+                    )
+
+                    sheet.save(
+                        update_fields=[
+                            "version",
+                            "versionSet",
+                        ]
+                    )
+
                 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ updates -> latest updated sheet is current if multiple ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
                 update_current_sheet_flags(project)
         
@@ -860,3 +930,58 @@ def sync_autodesk_data(user_id):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
+
+
+@shared_task
+def sync_selected_folders(user_id, project_id, folders):
+
+    user = CustomUser.objects.get(id=user_id)
+
+    headers = {
+        "Authorization": f"Bearer {user.access_token}"
+    }
+
+    project = AutoDeskProject.objects.get(
+        project_id=project_id
+    )
+
+    for folder in folders:
+
+        SyncFolderData.objects.update_or_create(
+            project=project,
+            folder_id=folder["folder_id"],
+            defaults={
+                "name": folder["name"],
+                "path": folder["path"],
+                "last_sync_time":timezone.now(),
+            }
+        )
+
+        folder_response = requests.get(
+            f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder['folder_id']}",
+            headers=headers
+        )
+
+        if folder_response.status_code != 200:
+            continue
+
+        folder_data = folder_response.json().get("data", [])
+        # attributes = folder_data["attributes"]
+
+        AutodeskFolders.objects.update_or_create(
+            project=project,
+            folder_id=folder_data["id"],
+            defaults={
+                "name": folder_data.get("attributes", {}).get("displayName"),
+                "hidden": folder_data.get("attributes", {}).get("hidden"),
+                "object_count": folder_data.get("attributes", {}).get("objectCount"),
+                "is_root": folder["path"].count("/") == 0,
+                "created_at": folder_data.get("attributes", {}).get("createTime"),
+                "created_by": folder_data.get("attributes", {}).get("createUserId"),
+                "created_by_name": folder_data.get("attributes", {}).get("createUserName"),
+                "updated_at": folder_data.get("attributes", {}).get("lastModifiedTime"),
+                "updated_by": folder_data.get("attributes", {}).get("lastModifiedUserId"),
+                "updated_by_name": folder_data.get("attributes", {}).get("lastModifiedUserName"),
+            }
+        )
