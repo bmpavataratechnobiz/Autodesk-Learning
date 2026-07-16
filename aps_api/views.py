@@ -251,54 +251,102 @@ class FetchSubFolders(APIView):
         }
 
         url = (
-            f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder_id}/contents?filter[type]=folders"
+            f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder_id}/contents"
         )
 
-        all_sub_folders = []
+        results = []
 
         while url:
-            response = requests.get(
-                url,
-                headers=headers
-            ) 
+            response = requests.get(url, headers=headers)
 
             if response.status_code != 200:
                 return Response(response.json(), response.status_code)
-            
+
             response_data = response.json()
 
-            all_sub_folders.extend(response_data.get("data", []))
+            for item in response_data.get("data", []):
+
+                # Keep all folders
+                if item["type"] == "folders":
+                    results.append(item)
+
+                # Keep only PDF files
+                elif item["type"] == "items":
+                    name = (
+                        item.get("attributes", {})
+                        .get("displayName")
+                        or item.get("attributes", {})
+                        .get("name", "")
+                    )
+
+                    if name.lower().endswith(".pdf"):
+                        results.append(item)
 
             url = response_data.get("links", {}).get("next", {}).get("href")
 
-        all_sub_folders.sort(
+        results.sort(
             key=lambda x: (
                 x.get("attributes", {}).get("displayName")
                 or x.get("attributes", {}).get("name", "")
             ).lower()
-        )        
+        )
 
-        return Response({"objects":len(all_sub_folders), "results":all_sub_folders}, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "objects": len(results),
+                "results": results
+            },
+            status=status.HTTP_200_OK
+        )
+    
+
+
+class SaveFoldersData(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        user = CustomUser.objects.get(email=request.user.email)
+
+        headers = {
+            "Authorization": f"Bearer {user.access_token}"
+        }
+        
+        project = AutoDeskProject.objects.get(project_id=project_id)
+        autodesk_user = AutodeskUser.objects.get(user=user)
+        folders = request.data.get("folders", [])
+
+        for folder in folders:
+            folder_response = requests.get(
+                f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder['folder_id']}",
+                headers=headers
+            )
+
+            if folder_response.status_code != 200:
+                return Response(folder_response.json(), folder_response.status_code)
+             
+            folder_data = folder_response.json().get("data", [])
+
+            SyncFolderData.objects.update_or_create(
+                project=project,
+                folder_id=folder["folder_id"],
+                defaults={
+                    "sync_user":autodesk_user,
+                    "name":folder_data["attributes"]["name"],
+                    "path":folder["path"]
+                }
+            )
+
+        return Response({"status":"sucess", "message":"data saved successfully"})
     
 
 class SyncFoldersData(APIView):
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, project_id):
+    def post(self, request):
+        sync_selected_folders.delay()
 
-        project = AutoDeskProject.objects.get(
-            project_id=project_id
-        )
+        return Response({"status":"success", "message":"folder sync started."})
 
-        folders = request.data.get("folders", [])
 
-        sync_selected_folders.delay(
-            request.user.id,
-            project.project_id,
-            folders
-        )
 
-        return Response(
-            {"message": "Folder sync has been started."},
-            status=status.HTTP_202_ACCEPTED
-        )
+

@@ -109,8 +109,8 @@ class AutodeskFolderMembersAdmin(admin.ModelAdmin):
 
 class SyncFolderDataAdmin(admin.ModelAdmin):
     model = SyncFolderData
-    list_display = ["id", "project", "name"]
-    list_display_links = ["id", "project", "name"]
+    list_display = ["id", "project", "name", "last_sync_time"]
+    list_display_links = ["id", "project", "name", "last_sync_time"]
 
 
 

@@ -21,6 +21,7 @@ urlpatterns = [
     path("hub/<str:hub_id>/fetch_top_folders/<str:project_id>/", views.FetchTopFolders.as_view(), name="fetch_top_folders"),
     path("project/<str:project_id>/folder/<str:folder_id>/", views.FetchSubFolders.as_view(), name="fetch_sub_folders"),
 
-    path("sync/project/<str:project_id>/", views.SyncFoldersData.as_view(), name="sync_folder_data"),
+    path("save_data/project/<str:project_id>/", views.SaveFoldersData.as_view(), name="save_folders_data"),
+    path("sync_folders_data/", views.SyncFoldersData.as_view(), name="sync_folders_data"), 
 
 ]

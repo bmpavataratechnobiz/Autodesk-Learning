@@ -86,7 +86,7 @@
 
         <div id="tree"></div>
 
-        <button id="syncBtn">Sync Selected Folders</button>
+        <button id="saveBtn">Save Selected Folders</button>
     </div>
 
     <script>
@@ -96,7 +96,7 @@
         const region = document.getElementById("region");
         const hub = document.getElementById("hub");
         const project = document.getElementById("project");
-        const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MTIzODU1LCJpYXQiOjE3ODQxMjAyNTUsImp0aSI6ImNmNTY3MDkwODNkODQ1Zjk5MjY4ZWRlOWRiMGUxYzM3IiwidXNlcl9pZCI6IjMifQ.jO0kLXL-AmIUEkhG2pm7sn4m-IrHtUyZXld5wp5Ma28";
+        const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzg0MjA4OTc3LCJpYXQiOjE3ODQyMDUzNzcsImp0aSI6IjVmZTdjMTNkOGRhZTQzZGU5NWI4YzZmZWY5YzNhOTJkIiwidXNlcl9pZCI6IjMifQ.fHIqgACto7ezm1lhtz55F1SXjS9OQUMWkHPpMzQY4Oc";
 
         async function api(url) {
 
@@ -209,68 +209,82 @@
             const div = document.createElement("div");
             div.className = "folder";
 
-            const checkbox = document.createElement("input");
-            checkbox.dataset.folderId = item.id;
-            checkbox.dataset.folderName = folderName;
-            checkbox.dataset.path = currentPath;
-            checkbox.type = "checkbox";
-            checkbox.className = "folder-checkbox";
+            if (item.type === "folders") {
+
+                const checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.className = "folder-checkbox";
+            
+                checkbox.dataset.folderId = item.id;
+                checkbox.dataset.folderName = folderName;
+                checkbox.dataset.path = currentPath;
+            
+                div.appendChild(checkbox);
+            }
 
             const icon = document.createElement("span");
-            icon.textContent = "📁";
+            if (item.type === "folders") {
+                icon.textContent = "📁";
+            } else {
+                icon.textContent = "📄";
+            }
 
             const text = document.createElement("span");
-            text.textContent = item.attributes.displayName || item.attributes.name;
+            const name = item.attributes.displayName || item.attributes.name;
 
-            div.appendChild(checkbox);
+            text.textContent = name;
+
+            if (item.type === "items") {
+                text.style.color = "#444";
+            }
+
             div.appendChild(icon);
             div.appendChild(text);
 
-            div.onclick = async () => {
+            if (item.type === "folders") {
 
-                if (li.dataset.loaded) {
-                    li.classList.toggle("open");
-                    return;
-                }
+                div.onclick = async () => {
 
-                const data = await api(
-                    `${BASE}/project/${project.value}/folder/${encodeURIComponent(item.id)}`
-                );
+                    if (li.dataset.loaded) {
+                        li.classList.toggle("open");
+                        return;
+                    }
 
-                const children = document.createElement("ul");
-
-                children.className = "children";
-
-                (data.results || []).forEach(folder => {
-                    children.appendChild(
-                        makeNode(folder, currentPath)
+                    const data = await api(
+                        `${BASE}/project/${project.value}/folder/${encodeURIComponent(item.id)}`
                     );
-                });
 
-                li.appendChild(children);
+                    const children = document.createElement("ul");
+                    children.className = "children";
 
-                li.dataset.loaded = "1";
+                    (data.results || []).forEach(child => {
+                        children.appendChild(makeNode(child, currentPath));
+                    });
 
-                li.classList.add("open");
+                    li.appendChild(children);
 
-            };
+                    li.dataset.loaded = "1";
+                    li.classList.add("open");
+                };
 
+            }
             li.appendChild(div);
 
             return li;
         }
 
-        document.getElementById("syncBtn").onclick = async () => {
+        document.getElementById("saveBtn").onclick = async () => {
 
             const folders = [];
         
             document.querySelectorAll(".folder-checkbox:checked").forEach(cb => {
+        
                 folders.push({
-                    project_id: project.value,
                     folder_id: cb.dataset.folderId,
                     name: cb.dataset.folderName,
                     path: cb.dataset.path
                 });
+        
             });
         
             if (folders.length === 0) {
@@ -279,7 +293,7 @@
             }
         
             const response = await fetch(
-                `${BASE}/sync/project/${project.value}/`,
+                `${BASE}/save_data/project/${project.value}/`,
                 {
                     method: "POST",
                     headers: {
@@ -296,7 +310,8 @@
         
             console.log(data);
         
-            alert("Folders synced started successfully!");
+            alert(data.message);
+        
         };
     </script>
 

@@ -108,7 +108,6 @@ def build_sheet_version_counts(headers, project_id):
     }
 
 
-
 def build_sheet_version_ranks(headers, project_id):
 
     version_sets_response = requests.get(
@@ -933,55 +932,199 @@ def sync_autodesk_data(user_id):
     
 
 
-@shared_task
-def sync_selected_folders(user_id, project_id, folders):
 
-    user = CustomUser.objects.get(id=user_id)
+
+
+# ***************************************************************** sync *****************************************************************
+from celery import chord
+
+def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
+
+    url = f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{folder_id}/contents"
+
+    while url:
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code != 200:
+            print(response.text)
+            return
+
+        data = response.json()
+
+        for obj in data.get("data", []):
+
+            # ---------------- Folder ----------------
+
+            if obj["type"] == "folders":
+
+                folder, _ = AutodeskFolders.objects.update_or_create(
+                    project=project,
+                    folder_id=obj["id"],
+                    defaults={
+                        "parent": parent,
+                        "is_root": False,
+                        "name": obj["attributes"]["displayName"],
+                        "hidden": obj["attributes"]["hidden"],
+                        "object_count": obj["attributes"]["objectCount"],
+                        "created_at": obj["attributes"]["createTime"],
+                        "created_by": obj["attributes"]["createUserId"],
+                        "created_by_name": obj["attributes"]["createUserName"],
+                        "updated_at": obj["attributes"]["lastModifiedTime"],
+                        "updated_by": obj["attributes"]["lastModifiedUserId"],
+                        "updated_by_name": obj["attributes"]["lastModifiedUserName"],
+                    }
+                )
+
+                sync_folder_recursive(
+                    headers=headers,
+                    project=project,
+                    parent=folder,
+                    folder_id=obj["id"],
+                    download_tasks=download_tasks
+                )
+
+            # ---------------- PDF ----------------
+
+            elif obj["type"] == "items":
+
+                file_name = obj["attributes"]["displayName"]
+
+                if not file_name.lower().endswith(".pdf"):
+                    continue
+
+                item_id = obj["id"]
+
+                file_response = requests.get(
+                    f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/items/{item_id}/tip",
+                    headers=headers
+                )
+
+                if file_response.status_code != 200:
+                    continue
+
+                file_data = file_response.json().get("data")
+
+                if not file_data:
+                    continue
+
+                file_obj, _ = AutodeskProjectFiles.objects.update_or_create(
+                    folder=parent,
+                    item_id=item_id,
+                    defaults={
+                        "name": file_data["attributes"]["displayName"],
+                        "version_number": file_data["attributes"]["versionNumber"],
+                        "version": file_data["attributes"]["extension"]["data"]["revisionDisplayLabel"],
+                        "created_at": file_data["attributes"]["createTime"],
+                        "created_by": file_data["attributes"]["createUserId"],
+                        "created_by_name": file_data["attributes"]["createUserName"],
+                        "updated_at": file_data["attributes"]["lastModifiedTime"],
+                        "updated_by": file_data["attributes"]["lastModifiedUserId"],
+                        "updated_by_name": file_data["attributes"]["lastModifiedUserName"],
+                        "current_file_id": file_data["id"],
+                        "file_size_bytes": file_data["attributes"]["storageSize"],
+                        "is_deleted": obj["attributes"].get("hidden", False),
+                    }
+                )
+
+                download_tasks.append(
+                    download_project_file.s(
+                        headers,
+                        project.project_id,
+                        file_data["id"],
+                        file_obj.pk,
+                        file_name,
+                        "project_file"
+                    )
+                )
+
+        url = data.get("links", {}).get("next", {}).get("href")
+
+@shared_task
+def update_folder_sync_time(results, sync_folder_id):
+
+    SyncFolderData.objects.filter(
+        id=sync_folder_id
+    ).update(
+        last_sync_time=timezone.now()
+    )
+
+    print(f"Folder {sync_folder_id} sync completed.")
+
+
+@shared_task
+def sync_single_folder(sync_folder_id):
+
+    sync_folder = SyncFolderData.objects.select_related(
+        "project",
+        "sync_user__user"
+    ).get(id=sync_folder_id)
+
+    project = sync_folder.project
+    user = sync_folder.sync_user.user
 
     headers = {
         "Authorization": f"Bearer {user.access_token}"
     }
 
-    project = AutoDeskProject.objects.get(
-        project_id=project_id
+    root_response = requests.get(
+        f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{sync_folder.folder_id}",
+        headers=headers
     )
 
-    for folder in folders:
+    if root_response.status_code != 200:
+        return
 
-        SyncFolderData.objects.update_or_create(
-            project=project,
-            folder_id=folder["folder_id"],
-            defaults={
-                "name": folder["name"],
-                "path": folder["path"],
-                "last_sync_time":timezone.now(),
-            }
+    root_data = root_response.json().get("data")
+
+    if not root_data:
+        return
+
+    root_folder, _ = AutodeskFolders.objects.update_or_create(
+        project=project,
+        folder_id=root_data["id"],
+        defaults={
+            "parent": None,
+            "is_root": True,
+            "name": root_data["attributes"]["displayName"],
+            "hidden": root_data["attributes"]["hidden"],
+            "object_count": root_data["attributes"]["objectCount"],
+            "created_at": root_data["attributes"]["createTime"],
+            "created_by": root_data["attributes"]["createUserId"],
+            "created_by_name": root_data["attributes"]["createUserName"],
+            "updated_at": root_data["attributes"]["lastModifiedTime"],
+            "updated_by": root_data["attributes"]["lastModifiedUserId"],
+            "updated_by_name": root_data["attributes"]["lastModifiedUserName"],
+        }
+    )
+
+    download_tasks = []
+
+    sync_folder_recursive(
+        headers=headers,
+        project=project,
+        parent=root_folder,
+        folder_id=sync_folder.folder_id,
+        download_tasks=download_tasks
+    )
+
+    if download_tasks:
+
+        chord(download_tasks)(
+            update_folder_sync_time.s(sync_folder.id)
         )
 
-        folder_response = requests.get(
-            f"https://developer.api.autodesk.com/data/v1/projects/{project_id}/folders/{folder['folder_id']}",
-            headers=headers
-        )
+    else:
+        update_folder_sync_time.delay([], sync_folder.id)
 
-        if folder_response.status_code != 200:
-            continue
 
-        folder_data = folder_response.json().get("data", [])
-        # attributes = folder_data["attributes"]
+@shared_task
+def sync_selected_folders():
 
-        AutodeskFolders.objects.update_or_create(
-            project=project,
-            folder_id=folder_data["id"],
-            defaults={
-                "name": folder_data.get("attributes", {}).get("displayName"),
-                "hidden": folder_data.get("attributes", {}).get("hidden"),
-                "object_count": folder_data.get("attributes", {}).get("objectCount"),
-                "is_root": folder["path"].count("/") == 0,
-                "created_at": folder_data.get("attributes", {}).get("createTime"),
-                "created_by": folder_data.get("attributes", {}).get("createUserId"),
-                "created_by_name": folder_data.get("attributes", {}).get("createUserName"),
-                "updated_at": folder_data.get("attributes", {}).get("lastModifiedTime"),
-                "updated_by": folder_data.get("attributes", {}).get("lastModifiedUserId"),
-                "updated_by_name": folder_data.get("attributes", {}).get("lastModifiedUserName"),
-            }
-        )
+    folder_ids = SyncFolderData.objects.values_list(
+        "id",
+        flat=True
+    )
+
+    for folder_id in folder_ids:
+        sync_single_folder.delay(folder_id)

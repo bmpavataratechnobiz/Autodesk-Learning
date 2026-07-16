@@ -116,10 +116,47 @@ class AutodeskProjectMembers(models.Model):
 
     def __str__(self):
         return f"{self.project} , {self.autodesk_user}, {self.status}"
+    
+
+class AutodeskFolders(models.Model):
+    project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE, related_name="folders")
+    folder_id = models.CharField(max_length=255)
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
+    name = models.CharField(max_length=255)
+    is_root = models.BooleanField(default=False)
+    hidden = models.BooleanField(default=False)
+    object_count = models.IntegerField(default=0)
+    created_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.CharField(max_length=255, null=True, blank=True)
+    created_by_name = models.CharField(max_length=255, null=True, blank=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.CharField(max_length=255, null=True, blank=True)
+    updated_by_name = models.CharField(max_length=255, null=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
+
+
+
+class AutodeskFolderMembers(models.Model):
+    folder = models.ForeignKey(AutodeskFolders, on_delete=models.CASCADE, related_name="folder_members")
+    autodesk_user = models.ForeignKey(AutodeskUser, on_delete=models.CASCADE, related_name="folder_users")
+    subject_id = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    email = models.EmailField()
+    user_type = models.CharField(max_length=255)
+    subject_status = models.CharField(max_length=255)
+    subject_type = models.CharField(max_length=255)
+    actions = models.JSONField(blank=True, null=True)
+    inherit_actions = models.JSONField(blank=True, null=True)
+
+    def __str__(self):
+        return self.name
 
 
 class AutodeskProjectFiles(models.Model):
-    project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE, related_name="project_files")
+    folder = models.ForeignKey(AutodeskFolders, on_delete=models.CASCADE, related_name="folder_files", blank=True, null=True)
     name = models.CharField(max_length=255, blank=True, null=True)
     version_number = models.CharField(max_length=10, blank=True, null=True)
     version = models.CharField(max_length=255, blank=True, null=True)
@@ -168,51 +205,17 @@ class AutodeskFileVersions(models.Model):
         return self.name
     
 
-
-class AutodeskFolders(models.Model):
-    project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE, related_name="folders")
-    folder_id = models.CharField(max_length=255)
-    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
-    name = models.CharField(max_length=255)
-    is_root = models.BooleanField(default=False)
-    hidden = models.BooleanField(default=False)
-    object_count = models.IntegerField(default=0)
-    created_at = models.DateTimeField(null=True, blank=True)
-    created_by = models.CharField(max_length=255, null=True, blank=True)
-    created_by_name = models.CharField(max_length=255, null=True, blank=True)
-    updated_at = models.DateTimeField(null=True, blank=True)
-    updated_by = models.CharField(max_length=255, null=True, blank=True)
-    updated_by_name = models.CharField(max_length=255, null=True, blank=True)
-
-    def __str__(self):
-        return self.name
-
-
-
-
-class AutodeskFolderMembers(models.Model):
-    folder = models.ForeignKey(AutodeskFolders, on_delete=models.CASCADE, related_name="folder_members")
-    autodesk_user = models.ForeignKey(AutodeskUser, on_delete=models.CASCADE, related_name="folder_users")
-    subject_id = models.CharField(max_length=255)
-    name = models.CharField(max_length=255)
-    email = models.EmailField()
-    user_type = models.CharField(max_length=255)
-    subject_status = models.CharField(max_length=255)
-    subject_type = models.CharField(max_length=255)
-    actions = models.JSONField(blank=True, null=True)
-    inherit_actions = models.JSONField(blank=True, null=True)
-
-    def __str__(self):
-        return self.name
-
-
-
 class SyncFolderData(models.Model):
     project = models.ForeignKey(AutoDeskProject, on_delete=models.CASCADE)
+    sync_user = models.ForeignKey(AutodeskUser, on_delete=models.CASCADE, blank=True, null=True)
+
     folder_id = models.CharField(max_length=255)
     name = models.CharField(max_length=255)
     path = models.CharField(max_length=255, blank=True, null=True)
     last_sync_time = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True, blank=True, null=True)
 
     def __str__(self):
         return self.name
