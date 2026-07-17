@@ -519,7 +519,11 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
                 f"{export_response.status_code} "
                 f"{export_response.text}"
             )
-            return
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "export_failed"
+            }
 
         export_id = export_response.json()["id"]
 
@@ -546,22 +550,26 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
 
         if not download_url:
             print(f"Export timeout: {file_name}")
-            return
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "timeout"
+            }
 
         file_response = requests.get(download_url)
 
         if file_response.status_code != 200:
             print(f"Download failed: {file_name}")
-            return
-        
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "download_failed"
+            }
+
         if model_type == "project_file":
-            file_obj = AutodeskProjectFiles.objects.get(
-                id=file_db_id
-            )
-        if model_type == "file_version":
-            file_obj =  AutodeskFileVersions.objects.get(
-                id=file_db_id
-            )
+            file_obj = AutodeskProjectFiles.objects.get(id=file_db_id)
+        else:
+            file_obj = AutodeskFileVersions.objects.get(id=file_db_id)
 
         file_obj.file.save(
             file_name,
@@ -571,8 +579,19 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
 
         print(f"Saved file: {file_name}")
 
+        return {
+            "status": "success",
+            "file": file_name
+        }
+
     except Exception as e:
         print(f"File download task failed: {e}")
+
+        return {
+            "status": "failed",
+            "file": file_name,
+            "reason": str(e)
+        }
 
 
 def update_create_project_files(headers, project_id, project):
@@ -714,7 +733,8 @@ def update_create_project_files(headers, project_id, project):
                     "version":versions_attribute.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
                     "is_deleted":is_deleted
                 }
-            )
+            )  
+
             print("For File Versions : ", autodesk_project_file.name)
             
             file_version_urn = file_version_data.get("id")
@@ -940,7 +960,7 @@ from celery import chord
 
 def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
 
-    url = f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{folder_id}/contents"
+    url = f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{folder_id}/contents?includeHidden=true"
 
     while url:
 
@@ -1008,22 +1028,35 @@ def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
                 if not file_data:
                     continue
 
+                file_attributes = file_data.get("attributes", {})
+
+                is_deleted = False
+                name = ""
+                if file_attributes.get("extension", {}).get("type") == "versions:autodesk.core:Deleted":
+                    name = file_attributes.get("extension", {}).get("data", {}).get("originalName")
+                    is_deleted = True
+                else:
+                    name = file_attributes.get("name")
+
+                if not file_data:
+                    continue
+
                 file_obj, _ = AutodeskProjectFiles.objects.update_or_create(
                     folder=parent,
                     item_id=item_id,
                     defaults={
-                        "name": file_data["attributes"]["displayName"],
-                        "version_number": file_data["attributes"]["versionNumber"],
-                        "version": file_data["attributes"]["extension"]["data"]["revisionDisplayLabel"],
-                        "created_at": file_data["attributes"]["createTime"],
-                        "created_by": file_data["attributes"]["createUserId"],
-                        "created_by_name": file_data["attributes"]["createUserName"],
-                        "updated_at": file_data["attributes"]["lastModifiedTime"],
-                        "updated_by": file_data["attributes"]["lastModifiedUserId"],
-                        "updated_by_name": file_data["attributes"]["lastModifiedUserName"],
+                        "name": name,
+                        "version_number": file_attributes["versionNumber"],
+                        "version": file_attributes.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
+                        "created_at": file_attributes["createTime"],
+                        "created_by": file_attributes["createUserId"],
+                        "created_by_name": file_attributes["createUserName"],
+                        "updated_at": file_attributes["lastModifiedTime"],
+                        "updated_by": file_attributes["lastModifiedUserId"],
+                        "updated_by_name": file_attributes["lastModifiedUserName"],
                         "current_file_id": file_data["id"],
-                        "file_size_bytes": file_data["attributes"]["storageSize"],
-                        "is_deleted": obj["attributes"].get("hidden", False),
+                        "file_size_bytes": file_attributes.get("storageSize", 0),
+                        "is_deleted": is_deleted,
                     }
                 )
 
@@ -1038,10 +1071,64 @@ def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
                     )
                 )
 
+                # create-store file versions data
+                file_versions_response = requests.get(
+                    f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/items/{item_id}/versions",
+                    headers=headers
+                )
+
+                if file_versions_response.status_code != 200:
+                    continue
+
+                file_versions_data = file_versions_response.json().get("data", [])                
+
+                for file_version_data in file_versions_data:
+                    versions_attribute = file_version_data.get("attributes", {})
+
+                    name = ""
+                    is_deleted = False
+                    if versions_attribute.get("extension", {}).get("type") == "versions:autodesk.core:Deleted": 
+                        name = versions_attribute.get("extension", {}).get("data", {}).get("originalName")
+                        is_deleted = True
+                    else:
+                        name = versions_attribute.get("name")
+
+                    file_versions, _ = AutodeskFileVersions.objects.update_or_create(
+                        file_id=file_version_data.get("id"),
+                        autodesk_project_file=file_obj,
+                        defaults={
+                            "name":name,
+                            "version_number":versions_attribute.get("versionNumber"),
+                            "created_at":versions_attribute.get("createTime"),
+                            "created_by":versions_attribute.get("createUserId"),
+                            "created_by_name":versions_attribute.get("createUserName"),
+                            "updated_at":versions_attribute.get("lastModifiedTime"),
+                            "updated_by":versions_attribute.get("lastModifiedUserId"),
+                            "updated_by_name":versions_attribute.get("lastModifiedUserName"),
+                            "file_size_bytes":versions_attribute.get("storageSize"),
+                            "version":versions_attribute.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
+                            "is_deleted":is_deleted
+                        }
+                    )
+
+                    project_id = project.project_id
+                    file_version_urn = file_version_data.get("id")
+                    file_db_id = file_versions.pk
+                    file_name = file_versions.name
+                    model_type = "file_version"
+
+                    download_tasks.append(
+                        download_project_file.s(headers, project_id, file_version_urn, file_db_id, file_name, model_type)
+                    )
+
         url = data.get("links", {}).get("next", {}).get("href")
+                    
+
 
 @shared_task
 def update_folder_sync_time(results, sync_folder_id):
+
+    print(results)
 
     SyncFolderData.objects.filter(
         id=sync_folder_id
@@ -1109,11 +1196,10 @@ def sync_single_folder(sync_folder_id):
     )
 
     if download_tasks:
-
+        print(f"{sync_folder.name} has {len(download_tasks)} downloads")
         chord(download_tasks)(
             update_folder_sync_time.s(sync_folder.id)
         )
-
     else:
         update_folder_sync_time.delay([], sync_folder.id)
 

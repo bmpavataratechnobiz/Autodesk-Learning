@@ -24,4 +24,6 @@ urlpatterns = [
     path("save_data/project/<str:project_id>/", views.SaveFoldersData.as_view(), name="save_folders_data"),
     path("sync_folders_data/", views.SyncFoldersData.as_view(), name="sync_folders_data"), 
 
+    path("file_data/<str:model_type>/<int:file_id>/", views.FileData.as_view(), name="file_Data"),
+
 ]

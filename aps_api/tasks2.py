@@ -1,6 +1,6 @@
 import requests #type:ignore
 from django.conf import settings
-from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers
+from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
@@ -8,6 +8,7 @@ from collections import defaultdict
 from django.utils.dateparse import parse_datetime
 from django_accounts.models import CustomUser
 from datetime import datetime
+from django.utils import timezone
 
 
 APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
@@ -105,7 +106,6 @@ def build_sheet_version_counts(headers, project_id):
         sheet_number: len(version_ids)
         for sheet_number, version_ids in sheet_versions.items()
     }
-
 
 
 def build_sheet_version_ranks(headers, project_id):
@@ -494,8 +494,118 @@ def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_
         print(f"PDF task failed: {e}")
 
 
+import io
+import qrcode
+
+from pypdf import PdfReader, PdfWriter, Transformation
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.colors import black
+from datetime import datetime
+
+
+def stamp_pdf_with_qr(pdf_bytes, qr_url):
+
+    # ---------------- Generate QR ----------------
+    qr = qrcode.make(qr_url)
+
+    qr_buffer = io.BytesIO()
+    qr.save(qr_buffer, format="PNG")
+    qr_buffer.seek(0)
+
+    qr_image = ImageReader(qr_buffer)
+
+    # ---------------- Read PDF ----------------
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+
+    qr_size = 80
+    padding = 20      
+    margin = 20    
+    footer_height = qr_size + (padding * 2)
+    qr_y = padding
+
+    for original_page in reader.pages:
+
+        width = float(original_page.mediabox.width)
+        height = float(original_page.mediabox.height)
+
+        # Create blank page with extra footer
+        new_page = writer.add_blank_page(
+            width,
+            height + footer_height
+        )
+
+        # Move original page upward
+        new_page.merge_transformed_page(
+            original_page,
+            Transformation().translate(
+                tx=0,
+                ty=footer_height
+            )
+        )
+
+        # ---------------- Create QR overlay ----------------
+        overlay_stream = io.BytesIO()
+
+        c = canvas.Canvas(
+            overlay_stream,
+            pagesize=(width, height + footer_height)
+        )
+
+        # Bottom-left
+        c.drawImage(
+            qr_image,
+            margin,
+            qr_y,
+            qr_size,
+            qr_size
+        )
+
+        # Bottom-right
+        c.drawImage(
+            qr_image,
+            width - qr_size - margin,
+            qr_y,
+            qr_size,
+            qr_size
+        )
+
+        stamp_text = f"Stamped by QR Verifier on {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+
+        c.setFont("Helvetica", 11)
+
+        text_width = c.stringWidth(stamp_text, "Helvetica", 11)
+
+        text_y = qr_y + (qr_size / 2) - 5
+
+        c.drawString(
+            (width - text_width) / 2,
+            text_y,
+            stamp_text
+        )
+        c.save()
+
+        overlay_stream.seek(0)
+
+        overlay_page = PdfReader(overlay_stream).pages[0]
+
+        # Merge QR overlay
+        new_page.merge_page(overlay_page)
+
+    output = io.BytesIO()
+
+    writer.write(output)
+
+    return output.getvalue()
+
+
+import traceback
+
 @shared_task
 def download_project_file(headers, project_id, file_version_urn, file_db_id, file_name, model_type):
+
+    print(f"\n==================== {file_name} ====================")
 
     payload = {
         "options": {
@@ -507,31 +617,40 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
     }
 
     try:
+        print("Creating Autodesk export...")
+
         export_response = requests.post(
             f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports",
             headers=headers,
             json=payload
         )
 
+        print(f"Export API Status: {export_response.status_code}")
+
         if export_response.status_code != 202:
-            print(
-                f"File export failed: {file_name} "
-                f"{export_response.status_code} "
-                f"{export_response.text}"
-            )
-            return
+            print(export_response.text)
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "export_failed"
+            }
 
         export_id = export_response.json()["id"]
 
+        print(f"Export ID: {export_id}")
+
         download_url = None
 
-        for _ in range(12):
+        for i in range(12):
+
             status_response = requests.get(
                 f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports/{export_id}",
                 headers=headers
             )
 
             status_data = status_response.json()
+
+            print(f"Poll {i + 1}: {status_data.get('status')}")
 
             if status_data.get("status") == "successful":
                 download_url = (
@@ -545,34 +664,74 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
             time.sleep(5)
 
         if not download_url:
-            print(f"Export timeout: {file_name}")
-            return
+            print("Export timed out.")
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "timeout"
+            }
+
+        print("Downloading PDF...")
 
         file_response = requests.get(download_url)
 
+        print(
+            f"Download Status: {file_response.status_code}, "
+            f"Content-Type: {file_response.headers.get('Content-Type')}, "
+            f"Size: {len(file_response.content)} bytes"
+        )
+
         if file_response.status_code != 200:
-            print(f"Download failed: {file_name}")
-            return
-        
+            return {
+                "status": "failed",
+                "file": file_name,
+                "reason": "download_failed"
+            }
+
+        print("Fetching database object...")
+
         if model_type == "project_file":
-            file_obj = AutodeskProjectFiles.objects.get(
-                id=file_db_id
-            )
-        if model_type == "file_version":
-            file_obj =  AutodeskFileVersions.objects.get(
-                id=file_db_id
-            )
+            file_obj = AutodeskProjectFiles.objects.get(id=file_db_id)
+            qr_url = f"http://192.168.1.6:8000/api/aps/file_data/project/{file_obj.id}/"
+        else:
+            file_obj = AutodeskFileVersions.objects.get(id=file_db_id)
+            qr_url = f"http://192.168.1.6:8000/api/aps/file_data/version/{file_obj.id}/"
+
+        print(f"QR URL: {qr_url}")
+
+        print("Stamping PDF...")
+
+        stamped_pdf = stamp_pdf_with_qr(
+            file_response.content,
+            qr_url
+        )
+
+        print(f"Stamped PDF Size: {len(stamped_pdf)} bytes")
+
+        print("Saving PDF...")
 
         file_obj.file.save(
             file_name,
-            ContentFile(file_response.content),
+            ContentFile(stamped_pdf),
             save=True
         )
 
-        print(f"Saved file: {file_name}")
+        print(f"SUCCESS: {file_name}")
 
-    except Exception as e:
-        print(f"File download task failed: {e}")
+        return {
+            "status": "success",
+            "file": file_name
+        }
+
+    except Exception:
+        print(f"\nERROR while processing: {file_name}")
+        traceback.print_exc()
+
+        return {
+            "status": "failed",
+            "file": file_name,
+            "reason": "exception"
+        }
 
 
 def update_create_project_files(headers, project_id, project):
@@ -714,7 +873,8 @@ def update_create_project_files(headers, project_id, project):
                     "version":versions_attribute.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
                     "is_deleted":is_deleted
                 }
-            )
+            )  
+
             print("For File Versions : ", autodesk_project_file.name)
             
             file_version_urn = file_version_data.get("id")
@@ -724,6 +884,7 @@ def update_create_project_files(headers, project_id, project):
             download_project_file.delay(headers, project_id, file_version_urn, file_db_id, file_name, model_type)
 
 
+# *********************************************************** MAIN FUNCTION ***********************************************************
 @shared_task
 def sync_autodesk_data(user_id):
     try:
@@ -928,3 +1089,266 @@ def sync_autodesk_data(user_id):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
+
+
+
+
+
+# ***************************************************************** sync *****************************************************************
+from celery import chord
+
+def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
+
+    url = f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{folder_id}/contents?includeHidden=true"
+
+    while url:
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code != 200:
+            print(response.text)
+            return
+
+        data = response.json()
+
+        for obj in data.get("data", []):
+
+            # ---------------- Folder ----------------
+
+            if obj["type"] == "folders":
+
+                folder, _ = AutodeskFolders.objects.update_or_create(
+                    project=project,
+                    folder_id=obj["id"],
+                    defaults={
+                        "parent": parent,
+                        "is_root": False,
+                        "name": obj["attributes"]["displayName"],
+                        "hidden": obj["attributes"]["hidden"],
+                        "object_count": obj["attributes"]["objectCount"],
+                        "created_at": obj["attributes"]["createTime"],
+                        "created_by": obj["attributes"]["createUserId"],
+                        "created_by_name": obj["attributes"]["createUserName"],
+                        "updated_at": obj["attributes"]["lastModifiedTime"],
+                        "updated_by": obj["attributes"]["lastModifiedUserId"],
+                        "updated_by_name": obj["attributes"]["lastModifiedUserName"],
+                    }
+                )
+
+                sync_folder_recursive(
+                    headers=headers,
+                    project=project,
+                    parent=folder,
+                    folder_id=obj["id"],
+                    download_tasks=download_tasks
+                )
+
+            # ---------------- PDF ----------------
+
+            elif obj["type"] == "items":
+
+                file_name = obj["attributes"]["displayName"]
+
+                if not file_name.lower().endswith(".pdf"):
+                    continue
+
+                item_id = obj["id"]
+
+                file_response = requests.get(
+                    f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/items/{item_id}/tip",
+                    headers=headers
+                )
+
+                if file_response.status_code != 200:
+                    continue
+
+                file_data = file_response.json().get("data")
+
+                if not file_data:
+                    continue
+
+                file_attributes = file_data.get("attributes", {})
+
+                is_deleted = False
+                name = ""
+                if file_attributes.get("extension", {}).get("type") == "versions:autodesk.core:Deleted":
+                    name = file_attributes.get("extension", {}).get("data", {}).get("originalName")
+                    is_deleted = True
+                else:
+                    name = file_attributes.get("name")
+
+                if not file_data:
+                    continue
+
+                file_obj, _ = AutodeskProjectFiles.objects.update_or_create(
+                    folder=parent,
+                    item_id=item_id,
+                    defaults={
+                        "name": name,
+                        "version_number": file_attributes["versionNumber"],
+                        "version": file_attributes.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
+                        "created_at": file_attributes["createTime"],
+                        "created_by": file_attributes["createUserId"],
+                        "created_by_name": file_attributes["createUserName"],
+                        "updated_at": file_attributes["lastModifiedTime"],
+                        "updated_by": file_attributes["lastModifiedUserId"],
+                        "updated_by_name": file_attributes["lastModifiedUserName"],
+                        "current_file_id": file_data["id"],
+                        "file_size_bytes": file_attributes.get("storageSize", 0),
+                        "is_deleted": is_deleted,
+                    }
+                )
+
+                download_tasks.append(
+                    download_project_file.s(
+                        headers,
+                        project.project_id,
+                        file_data["id"],
+                        file_obj.pk,
+                        file_name,
+                        "project_file"
+                    )
+                )
+
+                # create-store file versions data
+                file_versions_response = requests.get(
+                    f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/items/{item_id}/versions",
+                    headers=headers
+                )
+
+                if file_versions_response.status_code != 200:
+                    continue
+
+                file_versions_data = file_versions_response.json().get("data", [])                
+
+                for file_version_data in file_versions_data:
+                    versions_attribute = file_version_data.get("attributes", {})
+
+                    name = ""
+                    is_deleted = False
+                    if versions_attribute.get("extension", {}).get("type") == "versions:autodesk.core:Deleted": 
+                        name = versions_attribute.get("extension", {}).get("data", {}).get("originalName")
+                        is_deleted = True
+                    else:
+                        name = versions_attribute.get("name")
+
+                    file_versions, _ = AutodeskFileVersions.objects.update_or_create(
+                        file_id=file_version_data.get("id"),
+                        autodesk_project_file=file_obj,
+                        defaults={
+                            "name":name,
+                            "version_number":versions_attribute.get("versionNumber"),
+                            "created_at":versions_attribute.get("createTime"),
+                            "created_by":versions_attribute.get("createUserId"),
+                            "created_by_name":versions_attribute.get("createUserName"),
+                            "updated_at":versions_attribute.get("lastModifiedTime"),
+                            "updated_by":versions_attribute.get("lastModifiedUserId"),
+                            "updated_by_name":versions_attribute.get("lastModifiedUserName"),
+                            "file_size_bytes":versions_attribute.get("storageSize"),
+                            "version":versions_attribute.get("extension", {}).get("data", {}).get("revisionDisplayLabel", ""),
+                            "is_deleted":is_deleted
+                        }
+                    )
+
+                    project_id = project.project_id
+                    file_version_urn = file_version_data.get("id")
+                    file_db_id = file_versions.pk
+                    file_name = file_versions.name
+                    model_type = "file_version"
+
+                    download_tasks.append(
+                        download_project_file.s(headers, project_id, file_version_urn, file_db_id, file_name, model_type)
+                    )
+
+        url = data.get("links", {}).get("next", {}).get("href")
+                    
+
+
+@shared_task
+def update_folder_sync_time(sync_folder_id):
+
+    SyncFolderData.objects.filter(
+        id=sync_folder_id
+    ).update(
+        last_sync_time=timezone.now()
+    )
+
+    print(f"Folder {sync_folder_id} sync completed.")
+
+
+@shared_task
+def sync_single_folder(sync_folder_id):
+
+    sync_folder = SyncFolderData.objects.select_related(
+        "project",
+        "sync_user__user"
+    ).get(id=sync_folder_id)
+
+    project = sync_folder.project
+    user = sync_folder.sync_user.user
+
+    headers = {
+        "Authorization": f"Bearer {user.access_token}"
+    }
+
+    root_response = requests.get(
+        f"https://developer.api.autodesk.com/data/v1/projects/{project.project_id}/folders/{sync_folder.folder_id}",
+        headers=headers
+    )
+
+    if root_response.status_code != 200:
+        return
+
+    root_data = root_response.json().get("data")
+
+    if not root_data:
+        return
+
+    root_folder, _ = AutodeskFolders.objects.update_or_create(
+        project=project,
+        folder_id=root_data["id"],
+        defaults={
+            "parent": None,
+            "is_root": True,
+            "name": root_data["attributes"]["displayName"],
+            "hidden": root_data["attributes"]["hidden"],
+            "object_count": root_data["attributes"]["objectCount"],
+            "created_at": root_data["attributes"]["createTime"],
+            "created_by": root_data["attributes"]["createUserId"],
+            "created_by_name": root_data["attributes"]["createUserName"],
+            "updated_at": root_data["attributes"]["lastModifiedTime"],
+            "updated_by": root_data["attributes"]["lastModifiedUserId"],
+            "updated_by_name": root_data["attributes"]["lastModifiedUserName"],
+        }
+    )
+
+    download_tasks = []
+
+    sync_folder_recursive(
+        headers=headers,
+        project=project,
+        parent=root_folder,
+        folder_id=sync_folder.folder_id,
+        download_tasks=download_tasks
+    )
+
+    if download_tasks:
+        print(f"{sync_folder.name} has {len(download_tasks)} downloads")
+        chord(download_tasks)(
+            update_folder_sync_time.si(sync_folder.id)
+        )
+    else:
+        update_folder_sync_time.delay(sync_folder.id)
+
+
+@shared_task
+def sync_selected_folders():
+
+    folder_ids = SyncFolderData.objects.values_list(
+        "id",
+        flat=True
+    )
+
+    for folder_id in folder_ids:
+        sync_single_folder.delay(folder_id)

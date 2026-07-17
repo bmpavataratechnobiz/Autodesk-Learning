@@ -1,9 +1,9 @@
 import requests  # type:ignore
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from .tasks import sync_autodesk_data, sync_selected_folders
-# from .tasks2 import sync_autodesk_data
+# from .tasks import sync_autodesk_data, sync_selected_folders
+from .tasks2 import sync_autodesk_data, sync_selected_folders
 from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, SyncFolderData
 from django_accounts.models import CustomUser
 from rest_framework.response import Response
@@ -346,6 +346,32 @@ class SyncFoldersData(APIView):
         sync_selected_folders.delay()
 
         return Response({"status":"success", "message":"folder sync started."})
+
+
+
+class FileData(APIView):
+    # permission_classes = [IsAuthenticated]
+
+    def get(self, request, model_type, file_id):
+        if model_type == "project":
+            file = get_object_or_404(AutodeskProjectFiles, id=file_id)
+        else:
+            file = get_object_or_404(AutodeskFileVersions, id=file_id)
+
+        data = {
+            "name": file.name,
+            "version": file.version,
+            "version_number": file.version_number,
+            "created_by": file.created_by_name,
+            "updated_by": file.updated_by_name,
+            "updated_at": file.updated_at,
+            "file_size": file.file_size_bytes,
+            "is_deleted": file.is_deleted,
+        }
+
+        return Response(data)
+        
+
 
 
 
