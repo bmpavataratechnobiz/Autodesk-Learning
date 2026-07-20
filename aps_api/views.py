@@ -9,7 +9,8 @@ from django_accounts.models import CustomUser
 from rest_framework.response import Response
 from rest_framework import status 
 from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer, AutodeskFileVersionSerializer
-
+from django.db.models.functions import Cast
+from django.db.models import IntegerField
 
 
 class FetchHubProjectsView(APIView):
@@ -357,6 +358,15 @@ class FileData(APIView):
             file = get_object_or_404(AutodeskProjectFiles, id=file_id)
         else:
             file = get_object_or_404(AutodeskFileVersions, id=file_id)
+            latest_file = (AutodeskFileVersions.objects.filter(
+                autodesk_project_file=file.autodesk_project_file,
+                is_deleted=False
+            ).annotate(
+                version_no=Cast("version_number", IntegerField())
+            ).order_by(
+                "-version_number"
+            ).first())
+    
 
         data = {
             "name": file.name,
@@ -369,7 +379,30 @@ class FileData(APIView):
             "is_deleted": file.is_deleted,
         }
 
+        if model_type == "project":
+            data = data
+        else:
+            if file.file_id != latest_file.file_id:
+                scanned_version = data
+                latest_active_version = {
+                    "name": latest_file.name,
+                    "version": latest_file.version,
+                    "version_number": latest_file.version_number,
+                    "created_by": latest_file.created_by_name,
+                    "updated_by": latest_file.updated_by_name,
+                    "updated_at": latest_file.updated_at,
+                    "file_size": latest_file.file_size_bytes,
+                    "is_deleted": latest_file.is_deleted,
+                }
+                data = {
+                    "scanned_version":scanned_version,
+                    "latest_active_version":latest_active_version
+                }
+            else:
+                data = data
+
         return Response(data)
+    
         
 
 

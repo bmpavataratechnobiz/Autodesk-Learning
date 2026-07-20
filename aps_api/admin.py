@@ -75,14 +75,14 @@ class AutodeskProjectFilesAdmin(admin.ModelAdmin):
     form = AutodeskProjectFilesAdminForm
     inlines = [AutodeskFileVersionsInline]
     model = AutodeskProjectFiles
-    list_display = ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
-    list_display_links = ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+    list_display = ["id", "name", "version", "version_number", "file", "is_deleted"]
+    list_display_links = ["id", "name", "version", "version_number", "is_deleted"]
 
 
 class AutodeskFileVersionsAdmin(admin.ModelAdmin):
     model = AutodeskFileVersions
-    list_display =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
-    list_display_links =  ["id", "name", "version", "version_number", "created_at", "updated_at", "is_deleted"]
+    list_display =  ["id", "name", "version", "version_number", "file", "is_deleted"]
+    list_display_links =  ["id", "name", "version", "version_number", "is_deleted"]
     list_filter = ["name", "is_deleted"]
 
 
