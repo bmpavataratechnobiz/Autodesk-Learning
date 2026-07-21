@@ -3,14 +3,21 @@ from django.shortcuts import get_object_or_404, render
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 # from .tasks import sync_autodesk_data, sync_selected_folders
-from .tasks2 import sync_autodesk_data, sync_selected_folders
-from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, SyncFolderData
+from .tasks2 import sync_autodesk_data, sync_selected_folders, send_link_mail
+from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, RequestedVersionLinkRequest, SyncFolderData
 from django_accounts.models import CustomUser
 from rest_framework.response import Response
 from rest_framework import status 
-from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer, AutodeskFileVersionSerializer
+from .serializers import AutodeskSheetsSerializer, AutodeskProjectSerializer, AutodeskFileVersionSerializer,RequestedVersionLinkRequestSerializer
 from django.db.models.functions import Cast
 from django.db.models import IntegerField
+from django.core.mail import send_mail
+from django.urls import reverse
+from django.http import FileResponse
+from django.utils import timezone
+from datetime import timedelta
+from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
+
 
 
 class FetchHubProjectsView(APIView):
@@ -364,11 +371,13 @@ class FileData(APIView):
             ).annotate(
                 version_no=Cast("version_number", IntegerField())
             ).order_by(
-                "-version_number"
+                "-version_no"
             ).first())
     
 
         data = {
+            "id":file.pk,
+            "file_id":file.file_id,
             "name": file.name,
             "version": file.version,
             "version_number": file.version_number,
@@ -383,8 +392,9 @@ class FileData(APIView):
             data = data
         else:
             if file.file_id != latest_file.file_id:
-                scanned_version = data
                 latest_active_version = {
+                    "id":latest_file.pk,
+                    "file_id":latest_file.file_id,
                     "name": latest_file.name,
                     "version": latest_file.version,
                     "version_number": latest_file.version_number,
@@ -395,7 +405,7 @@ class FileData(APIView):
                     "is_deleted": latest_file.is_deleted,
                 }
                 data = {
-                    "scanned_version":scanned_version,
+                    "scanned_version":data,
                     "latest_active_version":latest_active_version
                 }
             else:
@@ -403,7 +413,125 @@ class FileData(APIView):
 
         return Response(data)
     
+
+class SendLatestVersionLinkRequest(APIView):    
+    def post(self, request):
+        email = request.data.get("email")
+        scanned_version_id =request.data.get("scanned_version_id")
+
+        scanned_version_obj = AutodeskFileVersions.objects.get(
+            id=scanned_version_id
+        )
+
+        latest_version_obj = (AutodeskFileVersions.objects.filter(
+            autodesk_project_file=scanned_version_obj.autodesk_project_file, 
+            is_deleted=False
+        ).annotate(
+            version_no=Cast("version_number", IntegerField())
+        ).order_by("-version_no").first())
+
+        RequestedVersionLinkRequest.objects.create(
+            scanned_file_version=scanned_version_obj,
+            requested_file_version=latest_version_obj,
+            email=email,
+            requested_at=timezone.now()
+        )
+
+        return Response(
+            {"message": "Request sent successfully."},
+            status=status.HTTP_200_OK
+        )
+
+
+class FetchVersionRequests(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        requested_objs = RequestedVersionLinkRequest.objects.all()
+
+        serializer = RequestedVersionLinkRequestSerializer(requested_objs, many=True)
+        return Response({"count":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
+    
+
+
+
+class ApproveRequests(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id):
+        requested_obj = get_object_or_404(RequestedVersionLinkRequest, id=id)
+        requested_obj.request_status = "APPROVED"
+        requested_obj.save(update_fields=["request_status"])
+
+        return Response(
+            {"status":"success", "message":"request approved!"}
+        )
+    
+
+class RejectRequests(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id):
+        requested_obj = get_object_or_404(RequestedVersionLinkRequest, id=id)
+        requested_obj.request_status = "REJECTED"
+        requested_obj.save(update_fields=["request_status"])
+
+        return Response(
+            {"status":"success", "message":"request rejected!"}
+        )
+
+
+# class SendRequestedLinks(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def post(self, request):
+#         request_obj = RequestedVersionLinkRequest.objects.filter(is_downloaded=False)
+#         for obj in request_obj:
+#             send_link_mail.delay(obj.id)
+
+#         return Response({"status":"success", "message":"mail sent successfully"})
+
+
+
+class DownloadLatestVersion(APIView):
+    def get(self, request, token):
+
+        token_obj = get_object_or_404(
+            RequestedVersionLinkRequest,
+            token=token
+        )
+
+        if timezone.now() > token_obj.created_at + timedelta(minutes=2):
+            return Response(
+                {"message": "Download link has expired."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if token_obj.is_downloaded == True:
+            return Response(
+                {"message": "This download link has already been used."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        latest_version = token_obj.requested_file_version
+
+        if not latest_version.file:
+            return Response(
+                {"message": "File not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         
+        token_obj.is_downloaded = True
+        token_obj.downloaded_at = timezone.now()
+        token_obj.save(update_fields=["is_downloaded", "downloaded_at"])
+
+        response = FileResponse(
+            latest_version.file.open("rb"),
+            as_attachment=True,
+            filename=latest_version.name
+        )
+
+        return response
 
 
 

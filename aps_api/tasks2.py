@@ -1,5 +1,7 @@
 import requests     #type:ignore
 from django.conf import settings
+from django.core.mail import send_mail
+from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
 from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
 from celery import shared_task
 from django.core.files.base import ContentFile
@@ -1408,7 +1410,7 @@ def sync_single_folder(sync_folder_id):
 
 @shared_task
 def sync_selected_folders():
-
+    
     folder_ids = SyncFolderData.objects.values_list(
         "id",
         flat=True
@@ -1416,3 +1418,21 @@ def sync_selected_folders():
 
     for folder_id in folder_ids:
         sync_single_folder.delay(folder_id)
+
+
+# @shared_task
+# def send_link_mail(id):
+#     download_link = f"http://192.168.1.9:8000/api/aps/download/{id.token}/"
+
+#     send_mail(
+#         subject="Latest File Version", 
+#         message=( 
+#             f"You scanned an older version of the drawing.\n\n" 
+#             f"Click the link below to download the latest version:\n\n" 
+#             f"{download_link}\n\n" f"This link will expire in 3 days and can only be used once." 
+#         ), 
+#         from_email=DEFAULT_FROM_EMAIL, 
+#         recipient_list=[id.email], 
+#         )
+    
+#     i

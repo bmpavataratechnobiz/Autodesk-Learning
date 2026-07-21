@@ -1,5 +1,8 @@
+from django.utils import timezone
+from datetime import timedelta
 from django.db import models
 from django_accounts.models import CustomUser
+import uuid
 
 
 class AutodeskUser(models.Model):
@@ -219,3 +222,28 @@ class SyncFolderData(models.Model):
 
     def __str__(self):
         return self.name
+    
+
+class RequestedVersionLinkRequest(models.Model):
+    REQUEST_STATUS_CHOICES = [
+        ("PENDING", "PENDING"),
+        ("APPROVED", "APPROVED"),
+        ("REJECTED", "REJECTED")
+    ]
+
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    scanned_file_version = models.ForeignKey(AutodeskFileVersions, on_delete=models.CASCADE, related_name="scanned_file_version_request")
+    requested_file_version = models.ForeignKey(AutodeskFileVersions, on_delete=models.CASCADE, related_name="requested_file_version_request")
+    email = models.EmailField()
+    request_status = models.CharField(choices=REQUEST_STATUS_CHOICES, max_length=255, default="PENDING")
+    requested_at = models.DateTimeField(blank=True, null=True)
+    is_downloaded = models.BooleanField(default=False)
+    downloaded_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return self.email
+
+
+

@@ -178,3 +178,11 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_ENABLE_UTC = False
 
 
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_HOST_USER = 'maganparmar1612@gmail.com'
+EMAIL_HOST_PASSWORD = 'lydnlejosrzjkeyl' 
+EMAIL_USE_TLS = True
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+

@@ -1,4 +1,4 @@
-import requests #type:ignore
+import requests     #type:ignore
 from django.conf import settings
 from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
 from celery import shared_task
@@ -9,6 +9,16 @@ from django.utils.dateparse import parse_datetime
 from django_accounts.models import CustomUser
 from datetime import datetime
 from django.utils import timezone
+from copy import copy
+
+import traceback
+import io
+import qrcode   #type:ignore
+from pypdf import PdfReader, PdfWriter, Transformation      #type:ignore
+from reportlab.pdfgen import canvas     #type:ignore
+from reportlab.lib.utils import ImageReader     #type:ignore
+from reportlab.lib.colors import black      #type:ignore
+from datetime import datetime
 
 
 APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
@@ -494,9 +504,176 @@ def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_
         print(f"PDF task failed: {e}")
 
 
+def stamp_pdf_with_qr(pdf_bytes, qr_url):
+    # ---------------- Generate QR ----------------
+    qr = qrcode.make(qr_url)
+
+    qr_buffer = io.BytesIO()
+    qr.save(qr_buffer, format="PNG")
+    qr_buffer.seek(0)
+
+    qr_image = ImageReader(qr_buffer)
+
+    # ---------------- Read PDF ----------------
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+
+    for page in reader.pages:
+
+        original_page = copy(page)
+
+        # Normalize rotation
+        if original_page.rotation:
+            original_page.transfer_rotation_to_content()
+
+        # Remove tiny original bottom border
+        original_page.mediabox.lower_left = (
+            original_page.mediabox.left,
+            original_page.mediabox.bottom + 2
+        )
+
+        width = float(original_page.mediabox.width)
+        height = float(original_page.mediabox.height)
+
+        # ==========================================================
+        # Dynamic scaling based on page size
+        # ==========================================================
+
+        shortest_side = min(width, height)
+
+        qr_size = int(shortest_side * 0.075)
+        qr_size = max(80, min(qr_size, 180))
+
+        # Distance between drawing and QR (smaller = closer)
+        top_gap = -10
+
+        # Distance between QR and bottom edge (larger = more space)
+        bottom_gap = 10
+
+        # Left/right margin
+        margin = int(qr_size * 0.20)
+
+        # Total footer height
+        footer_height = qr_size + top_gap + bottom_gap
+
+        # QR position
+        qr_y = bottom_gap
+
+        font_size = max(10, int(qr_size * 0.14))
+
+        # ==========================================================
+
+        new_page = writer.add_blank_page(
+            width,
+            height + footer_height
+        )
+
+        new_page.merge_transformed_page(
+            original_page,
+            Transformation().translate(
+                tx=0,
+                ty=footer_height
+            )
+        )
+
+        # ----------------------------------------------------------
+        # Hide original bottom border
+        # ----------------------------------------------------------
+
+        white_overlay = io.BytesIO()
+
+        c = canvas.Canvas(
+            white_overlay,
+            pagesize=(width, height + footer_height)
+        )
+
+        c.setFillColorRGB(1, 1, 1)
+
+        c.rect(
+            0,
+            footer_height - top_gap - 1,
+            width,
+            2,
+            stroke=0,
+            fill=1
+        )
+
+        c.save()
+
+        white_overlay.seek(0)
+
+        new_page.merge_page(
+            PdfReader(white_overlay).pages[0]
+        )
+
+        # ----------------------------------------------------------
+        # Draw footer
+        # ----------------------------------------------------------
+
+        overlay = io.BytesIO()
+
+        c = canvas.Canvas(
+            overlay,
+            pagesize=(width, height + footer_height)
+        )
+
+        # Left QR
+        c.drawImage(
+            qr_image,
+            margin,
+            qr_y,
+            qr_size,
+            qr_size
+        )
+
+        # Right QR
+        c.drawImage(
+            qr_image,
+            width - qr_size - margin,
+            qr_y,
+            qr_size,
+            qr_size
+        )
+
+        stamp_text = (
+            f"Stamped by QR Verifier on "
+            f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        )
+
+        c.setFont("Helvetica", font_size)
+
+        text_width = c.stringWidth(
+            stamp_text,
+            "Helvetica",
+            font_size
+        )
+
+        text_y = qr_y + (qr_size - font_size) / 2
+
+        c.drawString(
+            (width - text_width) / 2,
+            text_y,
+            stamp_text
+        )
+
+        c.save()
+
+        overlay.seek(0)
+
+        new_page.merge_page(
+            PdfReader(overlay).pages[0]
+        )
+
+    output = io.BytesIO()
+
+    writer.write(output)
+
+    return output.getvalue()
+
+
 @shared_task
 def download_project_file(headers, project_id, file_version_urn, file_db_id, file_name, model_type):
-
+    print(f"\n==================== {file_name} ====================")
     payload = {
         "options": {
             "outputFileName": file_name
@@ -507,18 +684,18 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
     }
 
     try:
+        print("Creating Autodesk export...")
+
         export_response = requests.post(
             f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports",
             headers=headers,
             json=payload
         )
 
+        print(f"Export API Status: {export_response.status_code}")
+
         if export_response.status_code != 202:
-            print(
-                f"File export failed: {file_name} "
-                f"{export_response.status_code} "
-                f"{export_response.text}"
-            )
+            print(export_response.text)
             return {
                 "status": "failed",
                 "file": file_name,
@@ -527,15 +704,20 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
 
         export_id = export_response.json()["id"]
 
+        print(f"Export ID: {export_id}")
+
         download_url = None
 
-        for _ in range(12):
+        for i in range(12):
+
             status_response = requests.get(
                 f"https://developer.api.autodesk.com/construction/files/v1/projects/{project_id}/exports/{export_id}",
                 headers=headers
             )
 
             status_data = status_response.json()
+
+            print(f"Poll {i + 1}: {status_data.get('status')}")
 
             if status_data.get("status") == "successful":
                 download_url = (
@@ -549,48 +731,73 @@ def download_project_file(headers, project_id, file_version_urn, file_db_id, fil
             time.sleep(5)
 
         if not download_url:
-            print(f"Export timeout: {file_name}")
+            print("Export timed out.")
             return {
                 "status": "failed",
                 "file": file_name,
                 "reason": "timeout"
             }
 
+        print("Downloading PDF...")
+
         file_response = requests.get(download_url)
 
+        print(
+            f"Download Status: {file_response.status_code}, "
+            f"Content-Type: {file_response.headers.get('Content-Type')}, "
+            f"Size: {len(file_response.content)} bytes"
+        )
+
         if file_response.status_code != 200:
-            print(f"Download failed: {file_name}")
             return {
                 "status": "failed",
                 "file": file_name,
                 "reason": "download_failed"
             }
 
+        print("Fetching database object...")
+
         if model_type == "project_file":
             file_obj = AutodeskProjectFiles.objects.get(id=file_db_id)
+            qr_url = f"http://192.168.1.9:8000/api/aps/file_data/project/{file_obj.id}/"
         else:
             file_obj = AutodeskFileVersions.objects.get(id=file_db_id)
+            qr_url = f"http://192.168.1.9:8000/api/aps/file_data/version/{file_obj.id}/"
+
+        print(f"QR URL: {qr_url}")
+
+        print("Stamping PDF...")
+
+        stamped_pdf = stamp_pdf_with_qr(
+            file_response.content,
+            qr_url
+        )
+
+        print(f"Stamped PDF Size: {len(stamped_pdf)} bytes")
+
+        print("Saving PDF...")
 
         file_obj.file.save(
             file_name,
-            ContentFile(file_response.content),
+            ContentFile(stamped_pdf),
             save=True
         )
 
-        print(f"Saved file: {file_name}")
+        print(f"SUCCESS: {file_name}")
 
         return {
             "status": "success",
             "file": file_name
         }
 
-    except Exception as e:
-        print(f"File download task failed: {e}")
+    except Exception:
+        print(f"\nERROR while processing: {file_name}")
+        traceback.print_exc()
 
         return {
             "status": "failed",
             "file": file_name,
-            "reason": str(e)
+            "reason": "exception"
         }
 
 
@@ -953,8 +1160,6 @@ def sync_autodesk_data(user_id):
 
 
 
-
-
 # ***************************************************************** sync *****************************************************************
 from celery import chord
 
@@ -1126,9 +1331,7 @@ def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
 
 
 @shared_task
-def update_folder_sync_time(results, sync_folder_id):
-
-    print(results)
+def update_folder_sync_time(sync_folder_id):
 
     SyncFolderData.objects.filter(
         id=sync_folder_id
@@ -1141,7 +1344,6 @@ def update_folder_sync_time(results, sync_folder_id):
 
 @shared_task
 def sync_single_folder(sync_folder_id):
-
     sync_folder = SyncFolderData.objects.select_related(
         "project",
         "sync_user__user"
@@ -1198,10 +1400,10 @@ def sync_single_folder(sync_folder_id):
     if download_tasks:
         print(f"{sync_folder.name} has {len(download_tasks)} downloads")
         chord(download_tasks)(
-            update_folder_sync_time.s(sync_folder.id)
+            update_folder_sync_time.si(sync_folder.id)
         )
     else:
-        update_folder_sync_time.delay([], sync_folder.id)
+        update_folder_sync_time.delay(sync_folder.id)
 
 
 @shared_task

@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, SyncFolderData, RequestedVersionLinkRequest
 
 
 
@@ -113,6 +113,12 @@ class SyncFolderDataAdmin(admin.ModelAdmin):
     list_display_links = ["id", "project", "name", "last_sync_time"]
 
 
+class RequestedVersionLinkRequestAdmin(admin.ModelAdmin):
+    model = RequestedVersionLinkRequest
+    list_display = ["id", "email", "token", "scanned_file_version", "requested_file_version", "created_at"]
+    list_display_links = ["id", "email", "token", "scanned_file_version", "requested_file_version"]
+
+
 
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
 admin.site.register(AutodeskAccount, AutodeskAccountAdmin)
@@ -125,3 +131,4 @@ admin.site.register(AutodeskFileVersions, AutodeskFileVersionsAdmin)
 admin.site.register(AutodeskFolders, AutodeskFoldersAdmin)
 admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
 admin.site.register(SyncFolderData, SyncFolderDataAdmin)
+admin.site.register(RequestedVersionLinkRequest, RequestedVersionLinkRequestAdmin)
