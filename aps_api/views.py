@@ -4,7 +4,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 # from .tasks import sync_autodesk_data, sync_selected_folders
 from .tasks2 import sync_autodesk_data, sync_selected_folders, send_link_mail
-from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, RequestedVersionLinkRequest, SyncFolderData
+from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, RequestedVersionLinkRequest, SyncFolderData, RequestedSheetVersionRequest
 from django_accounts.models import CustomUser
 from rest_framework.response import Response
 from rest_framework import status 
@@ -308,7 +308,6 @@ class FetchSubFolders(APIView):
         )
     
 
-
 class SaveFoldersData(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -356,14 +355,13 @@ class SyncFoldersData(APIView):
         return Response({"status":"success", "message":"folder sync started."})
 
 
-
 class FileData(APIView):
     # permission_classes = [IsAuthenticated]
 
     def get(self, request, model_type, file_id):
         if model_type == "project":
             file = get_object_or_404(AutodeskProjectFiles, id=file_id)
-        else:
+        elif model_type == "version":
             file = get_object_or_404(AutodeskFileVersions, id=file_id)
             latest_file = (AutodeskFileVersions.objects.filter(
                 autodesk_project_file=file.autodesk_project_file,
@@ -390,7 +388,7 @@ class FileData(APIView):
 
         if model_type == "project":
             data = data
-        else:
+        elif model_type == "version":
             if file.file_id != latest_file.file_id:
                 latest_active_version = {
                     "id":latest_file.pk,
@@ -453,44 +451,33 @@ class FetchVersionRequests(APIView):
         return Response({"count":len(serializer.data), "results":serializer.data}, status=status.HTTP_200_OK)
     
 
-
-
-class ApproveRequests(APIView):
+class UpdateRequests(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, id):
+        status = request.data.get("status")
+
         requested_obj = get_object_or_404(RequestedVersionLinkRequest, id=id)
-        requested_obj.request_status = "APPROVED"
+        requested_obj.request_status = status
         requested_obj.save(update_fields=["request_status"])
 
         return Response(
-            {"status":"success", "message":"request approved!"}
+            {"status":"success", "message":"request status updated!"}
         )
     
 
-class RejectRequests(APIView):
+class SendRequestedLinks(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, id):
-        requested_obj = get_object_or_404(RequestedVersionLinkRequest, id=id)
-        requested_obj.request_status = "REJECTED"
-        requested_obj.save(update_fields=["request_status"])
+    def post(self, request):
+        approved_ids = RequestedVersionLinkRequest.objects.filter(
+            request_status="APPROVED"
+        ).values_list("id", flat=True)
 
-        return Response(
-            {"status":"success", "message":"request rejected!"}
-        )
+        for id in approved_ids:
+            send_link_mail.delay(id)
 
-
-# class SendRequestedLinks(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         request_obj = RequestedVersionLinkRequest.objects.filter(is_downloaded=False)
-#         for obj in request_obj:
-#             send_link_mail.delay(obj.id)
-
-#         return Response({"status":"success", "message":"mail sent successfully"})
-
+        return Response({"status":"success", "message":"mail sent successfully"})
 
 
 class DownloadLatestVersion(APIView):
@@ -501,7 +488,7 @@ class DownloadLatestVersion(APIView):
             token=token
         )
 
-        if timezone.now() > token_obj.created_at + timedelta(minutes=2):
+        if timezone.now() > token_obj.created_at + timedelta(days=3):
             return Response(
                 {"message": "Download link has expired."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -534,6 +521,83 @@ class DownloadLatestVersion(APIView):
         return response
 
 
+class SheetData(APIView):
+    # permission_classes = [IsAuthenticated]
+
+    def get(self, request, sheet_id):
+        try:
+            scanned_sheet_obj = AutodeskSheets.objects.get(id=sheet_id)
+            sheet_number =  scanned_sheet_obj.sheetNumber
+            latest_sheet_obj = (AutodeskSheets.objects.filter(
+                sheetNumber=sheet_number
+            ).annotate(
+                version_no=Cast("version", IntegerField())
+            ).order_by(
+                "-version_no"
+            ).first())
+
+        except AutodeskSheets.DoesNotExist:
+            return Response({"status":"error", "message":"data does not exist!"})
+        
+        scanned_sheet_data = {
+            "title":scanned_sheet_obj.title,
+            "sheetId":scanned_sheet_obj.sheetId,
+            "sheetNumber":scanned_sheet_obj.sheetNumber,
+            "versionSet":scanned_sheet_obj.versionSet.name,
+            "version":scanned_sheet_obj.version,
+            "createdByName":scanned_sheet_obj.createdByName,
+            "updatedByName":scanned_sheet_obj.updatedByName,
+            "is_current":scanned_sheet_obj.is_current,
+        }
+
+        if scanned_sheet_obj.sheetId == latest_sheet_obj.sheetId:        
+            data={
+                "scanned_sheet_data":scanned_sheet_data
+            }
+        else:
+            latest_sheet_data = {
+                "title":latest_sheet_obj.title,
+                "sheetId":latest_sheet_obj.sheetId,
+                "sheetNumber":latest_sheet_obj.sheetNumber,
+                "versionSet":latest_sheet_obj.versionSet.name,
+                "version":latest_sheet_obj.version,
+                "createdByName":latest_sheet_obj.createdByName,
+                "updatedByName":latest_sheet_obj.updatedByName,
+                "is_current":latest_sheet_obj.is_current,
+            }
+
+            data = {
+                "scanned_sheet_data":scanned_sheet_data,
+                "latest_sheet_data":latest_sheet_data,
+            }
+
+        return Response(data)
 
 
+class SendLatestSheetVersionRequest(APIView):
+    def post(self, request):
+        email = request.data.get("email")
+        scanned_sheet_version_id =request.data.get("scanned_version_id")
 
+        scanned_sheet_version_obj = AutodeskSheets.objects.get(
+            id=scanned_sheet_version_id
+        )
+
+        latest_sheet_version_obj = (AutodeskSheets.objects.filter(
+            sheetNumber=scanned_sheet_version_obj.sheetNumber, 
+            is_deleted=False
+        ).annotate(
+            version_no=Cast("version", IntegerField())
+        ).order_by("-version_no").first())
+
+        RequestedSheetVersionRequest.objects.create(
+            scanned_sheet_version=scanned_sheet_version_obj,
+            requested_sheet_version=latest_sheet_version_obj,
+            email=email,
+            requested_at=timezone.now()
+        )
+
+        return Response(
+            {"message": "Request sent successfully."},
+            status=status.HTTP_200_OK
+        )

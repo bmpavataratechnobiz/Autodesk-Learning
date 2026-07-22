@@ -2,7 +2,7 @@ import requests     #type:ignore
 from django.conf import settings
 from django.core.mail import send_mail
 from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
-from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, SyncFolderData
+from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, RequestedVersionLinkRequest, SyncFolderData
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
@@ -444,68 +444,6 @@ def sync_project_folders(headers, hub_id, project_id):
     return f"Folders synced for {project_obj.name}"
 
 
-@shared_task
-def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_name, sheet_db_id):
-    payload = {
-        "sheets": [sheet_id],
-        "options": {
-            "outputFileName": upload_file_name
-        }
-    }
-
-    try:
-        export_response = requests.post(
-            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/exports",
-            headers=headers,
-            json=payload
-        )
-
-        if export_response.status_code != 202:
-            print(f"Export failed for {sheet_id}")
-            return
-
-        export_job_id = export_response.json()["id"]
-
-        download_url = None
-
-        for _ in range(12):
-            status_response = requests.get(
-                f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/exports/{export_job_id}",
-                headers=headers
-            )
-
-            status_data = status_response.json()
-
-            if status_data.get("status") == "successful":
-                download_url = status_data["result"]["output"]["signedUrl"]
-                break
-
-            time.sleep(5)
-
-        if not download_url:
-            print(f"Export timeout for {sheet_id}")
-            return
-
-        pdf_resp = requests.get(download_url)
-
-        if pdf_resp.status_code != 200:
-            print(f"Download failed for {sheet_id}")
-            return
-
-        sheet_obj = AutodeskSheets.objects.get(id=sheet_db_id)
-
-        sheet_obj.file.save(
-            f"{sheet_number}.pdf",
-            ContentFile(pdf_resp.content),
-            save=True
-        )
-
-        # print(f"PDF saved for {sheet_number}")
-
-    except Exception as e:
-        print(f"PDF task failed: {e}")
-
-
 def stamp_pdf_with_qr(pdf_bytes, qr_url):
     # ---------------- Generate QR ----------------
     qr = qrcode.make(qr_url)
@@ -671,6 +609,77 @@ def stamp_pdf_with_qr(pdf_bytes, qr_url):
     writer.write(output)
 
     return output.getvalue()
+
+
+@shared_task
+def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_name, sheet_db_id):
+    payload = {
+        "sheets": [sheet_id],
+        "options": {
+            "outputFileName": upload_file_name
+        }
+    }
+
+    try:
+        export_response = requests.post(
+            f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/exports",
+            headers=headers,
+            json=payload
+        )
+
+        if export_response.status_code != 202:
+            print(f"Export failed for {sheet_id}")
+            return
+
+        export_job_id = export_response.json()["id"]
+
+        download_url = None
+
+        for _ in range(12):
+            status_response = requests.get(
+                f"https://developer.api.autodesk.com/construction/sheets/v1/projects/{project_id}/exports/{export_job_id}",
+                headers=headers
+            )
+
+            status_data = status_response.json()
+
+            if status_data.get("status") == "successful":
+                download_url = status_data["result"]["output"]["signedUrl"]
+                break
+
+            time.sleep(5)
+
+        if not download_url:
+            print(f"Export timeout for {sheet_id}")
+            return
+
+        pdf_resp = requests.get(download_url)
+
+        if pdf_resp.status_code != 200:
+            print(f"Download failed for {sheet_id}")
+            return
+
+        sheet_obj = AutodeskSheets.objects.get(id=sheet_db_id)
+
+        qr_url = (
+            f"http://192.168.1.7:8000/api/aps/sheet_data/{sheet_obj.id}/"
+        )
+
+        stamped_pdf = stamp_pdf_with_qr(
+            pdf_resp.content,
+            qr_url
+        )
+
+        sheet_obj.file.save(
+            f"{sheet_number}.pdf",
+            ContentFile(stamped_pdf),
+            save=True
+        )
+
+        print(f"SHEET saved for {sheet_number}")
+
+    except Exception as e:
+        print(f"PDF task failed: {e}")
 
 
 @shared_task
@@ -951,6 +960,8 @@ def update_create_project_files(headers, project_id, project):
             file_name = file_version.name
             model_type = "file_version"
             download_project_file.delay(headers, project_id, file_version_urn, file_db_id, file_name, model_type)
+
+
 
 
 # *********************************************************** MAIN FUNCTION ***********************************************************
@@ -1329,8 +1340,7 @@ def sync_folder_recursive(headers, project, parent, folder_id, download_tasks):
                     )
 
         url = data.get("links", {}).get("next", {}).get("href")
-                    
-
+                   
 
 @shared_task
 def update_folder_sync_time(sync_folder_id):
@@ -1420,19 +1430,29 @@ def sync_selected_folders():
         sync_single_folder.delay(folder_id)
 
 
-# @shared_task
-# def send_link_mail(id):
-#     download_link = f"http://192.168.1.9:8000/api/aps/download/{id.token}/"
-
-#     send_mail(
-#         subject="Latest File Version", 
-#         message=( 
-#             f"You scanned an older version of the drawing.\n\n" 
-#             f"Click the link below to download the latest version:\n\n" 
-#             f"{download_link}\n\n" f"This link will expire in 3 days and can only be used once." 
-#         ), 
-#         from_email=DEFAULT_FROM_EMAIL, 
-#         recipient_list=[id.email], 
-#         )
+@shared_task
+def send_link_mail(id):
+    try:
+        obj = RequestedVersionLinkRequest.objects.get(
+            id=id     
+        )
+    except RequestedVersionLinkRequest.DoesNotExist:
+        return
     
-#     i
+    download_link = f"http://192.168.1.7:8000/api/aps/download/{obj.token}/"
+
+    send_mail(
+        subject="Latest File Version", 
+        message=( 
+            f"You scanned an older version of the drawing.\n\n" 
+            f"Click the link below to download the latest version:\n\n" 
+            f"{download_link}\n\n" 
+            f"This link will expire in 3 days and can only be used once." 
+        ), 
+        from_email=DEFAULT_FROM_EMAIL, 
+        recipient_list=[obj.email], 
+    )
+
+    obj.request_status = "SEND"
+    obj.save(update_fields=["request_status"])
+    

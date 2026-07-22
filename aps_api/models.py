@@ -96,7 +96,7 @@ class AutodeskSheets(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return self.project.name
+        return f"{self.sheetNumber}  {self.version}"  
 
 
 
@@ -228,7 +228,8 @@ class RequestedVersionLinkRequest(models.Model):
     REQUEST_STATUS_CHOICES = [
         ("PENDING", "PENDING"),
         ("APPROVED", "APPROVED"),
-        ("REJECTED", "REJECTED")
+        ("REJECTED", "REJECTED"),
+        ("SEND", "SEND"),
     ]
 
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -244,6 +245,30 @@ class RequestedVersionLinkRequest(models.Model):
     
     def __str__(self):
         return self.email
+    
+
+class RequestedSheetVersionRequest(models.Model):
+    REQUEST_STATUS_CHOICES = [
+        ("PENDING", "PENDING"),
+        ("APPROVED", "APPROVED"),
+        ("REJECTED", "REJECTED"),
+        ("SEND", "SEND"),
+    ]
+
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    scanned_sheet_version = models.ForeignKey(AutodeskSheets, on_delete=models.CASCADE, related_name="scanned_sheet_version_request")
+    requested_sheet_version = models.ForeignKey(AutodeskSheets, on_delete=models.CASCADE, related_name="requested_sheet_version_request")
+    email = models.EmailField()
+    request_status = models.CharField(choices=REQUEST_STATUS_CHOICES, max_length=255, default="PENDING")
+    requested_at = models.DateTimeField(blank=True, null=True)
+    is_downloaded = models.BooleanField(default=False)
+    downloaded_at = models.DateTimeField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        return self.email
+    
 
 
 

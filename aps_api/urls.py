@@ -24,12 +24,19 @@ urlpatterns = [
     path("save_data/project/<str:project_id>/", views.SaveFoldersData.as_view(), name="save_folders_data"),
     path("sync_folders_data/", views.SyncFoldersData.as_view(), name="sync_folders_data"), 
 
-    path("file_data/<str:model_type>/<int:file_id>/", views.FileData.as_view(), name="file_Data"),
+
+    # fileeeeeeeeee
+    path("file_data/<str:model_type>/<int:file_id>/", views.FileData.as_view(), name="file_data"),
     path("send_latest_version_request/", views.SendLatestVersionLinkRequest.as_view(), name="send_latest_version_request"),
     path("fetch_version_requests/", views.FetchVersionRequests.as_view(), name="fetch_version_requests"),
-    path("approve_request/<str:id>/", views.ApproveRequests.as_view(), name="approve_request"),
-    path("reject_request/<str:id>/", views.RejectRequests.as_view(), name="reject_request"),
-    # path("send_link_mail/", views.SendRequestedLinks.as_view(), name="send_link_mail"),
+    path("update_request/<str:id>/", views.UpdateRequests.as_view(), name="update_request"),
+    path("send_link_mail/", views.SendRequestedLinks.as_view(), name="send_link_mail"),
     path("download/<uuid:token>/", views.DownloadLatestVersion.as_view(), name="download_latest_version"),
+    path("sheet_data/<int:sheet_id>/", views.SheetData.as_view(), name="sheet_data"),
+
+
+    # sheettttttttt
+    path("sheet_data/<str:sheet_id>/", views.SheetData.as_view(), name="sheet_data"),
+    path("send_sheet_version_request/", views.SendLatestSheetVersionRequest.as_view(), name="send_sheet_version_request"),
 
 ]

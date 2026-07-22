@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, SyncFolderData, RequestedVersionLinkRequest
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, RequestedSheetVersionRequest, SyncFolderData, RequestedVersionLinkRequest
 
 
 
@@ -115,9 +115,14 @@ class SyncFolderDataAdmin(admin.ModelAdmin):
 
 class RequestedVersionLinkRequestAdmin(admin.ModelAdmin):
     model = RequestedVersionLinkRequest
-    list_display = ["id", "email", "token", "scanned_file_version", "requested_file_version", "created_at"]
+    list_display = ["id", "email", "token", "scanned_file_version", "requested_file_version", "request_status", "downloaded_at"]
     list_display_links = ["id", "email", "token", "scanned_file_version", "requested_file_version"]
 
+
+class RequestedSheetVersionRequestAdmin(admin.ModelAdmin):
+    model = RequestedSheetVersionRequest
+    list_display = ["id", "email", "token", "scanned_sheet_version", "requested_sheet_version", "request_status", "downloaded_at"]
+    list_display_links = ["id", "email", "token", "scanned_sheet_version", "requested_sheet_version"]
 
 
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
@@ -132,3 +137,4 @@ admin.site.register(AutodeskFolders, AutodeskFoldersAdmin)
 admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
 admin.site.register(SyncFolderData, SyncFolderDataAdmin)
 admin.site.register(RequestedVersionLinkRequest, RequestedVersionLinkRequestAdmin)
+admin.site.register(RequestedSheetVersionRequest, RequestedSheetVersionRequestAdmin)
