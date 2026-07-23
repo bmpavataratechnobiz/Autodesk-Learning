@@ -2,7 +2,7 @@ import requests     #type:ignore
 from django.conf import settings
 from django.core.mail import send_mail
 from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
-from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, RequestedVersionLinkRequest, SyncFolderData
+from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, RequestedVersionLinkRequest, SyncFolderData, RequestedSheetVersionRequest
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
@@ -12,6 +12,8 @@ from django_accounts.models import CustomUser
 from datetime import datetime
 from django.utils import timezone
 from copy import copy
+from django.core.signing import TimestampSigner
+
 
 import traceback
 import io
@@ -1431,18 +1433,31 @@ def sync_selected_folders():
 
 
 @shared_task
-def send_link_mail(id):
+def send_link_mail(id, type):
     try:
-        obj = RequestedVersionLinkRequest.objects.get(
-            id=id     
-        )
+        if type == "File":
+            obj = RequestedVersionLinkRequest.objects.get(
+                id=id     
+            )
+        elif type == "Sheet":
+            obj = RequestedSheetVersionRequest.objects.get(
+                id=id
+            )
     except RequestedVersionLinkRequest.DoesNotExist:
         return
+    except RequestedSheetVersionRequest.DoesNotExist:
+        return
     
-    download_link = f"http://192.168.1.7:8000/api/aps/download/{obj.token}/"
+    signer = TimestampSigner()
+
+    signed_token = signer.sign(str(obj.token))
+
+    download_link = (
+        f"http://192.168.1.7:8000/api/aps/download/{type}/{signed_token}/"
+    )
 
     send_mail(
-        subject="Latest File Version", 
+        subject=f"Latest {type} Version", 
         message=( 
             f"You scanned an older version of the drawing.\n\n" 
             f"Click the link below to download the latest version:\n\n" 

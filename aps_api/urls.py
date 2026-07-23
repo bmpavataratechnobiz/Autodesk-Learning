@@ -31,12 +31,13 @@ urlpatterns = [
     path("fetch_version_requests/", views.FetchVersionRequests.as_view(), name="fetch_version_requests"),
     path("update_request/<str:id>/", views.UpdateRequests.as_view(), name="update_request"),
     path("send_link_mail/", views.SendRequestedLinks.as_view(), name="send_link_mail"),
-    path("download/<uuid:token>/", views.DownloadLatestVersion.as_view(), name="download_latest_version"),
-    path("sheet_data/<int:sheet_id>/", views.SheetData.as_view(), name="sheet_data"),
+    path("download/<str:type>/<str:token>/", views.DownloadLatestVersion.as_view(), name="download_latest_version"),
 
 
     # sheettttttttt
     path("sheet_data/<str:sheet_id>/", views.SheetData.as_view(), name="sheet_data"),
     path("send_sheet_version_request/", views.SendLatestSheetVersionRequest.as_view(), name="send_sheet_version_request"),
-
+    path("fetch_sheet_requests/", views.FetchSheetRequests.as_view(), name="fetch_sheet_requests"),
+    path("update_sheet_request/<str:id>/", views.UpdateSheetRequest.as_view(), name="update_sheet_request"),
+    path("send_sheet_link_mail/", views.SendRequestedSheets.as_view(), name="send_sheet_link_mail"),
 ]

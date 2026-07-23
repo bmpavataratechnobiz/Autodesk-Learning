@@ -270,5 +270,45 @@ class RequestedSheetVersionRequest(models.Model):
         return self.email
     
 
+class Subscriptions(models.Model):
+    SUBSCRIPTION_TYPE_CHOICES = (
+        ("Free Trial", "Free Trial"),
+        ("Basic", "Basic"),
+        ("Standard", "Standard"),
+        ("Premium", "Premium")
+    )
+    SUBSCRIPTION_TERM_CHOICES = (
+        ("Free Trial", "Free Trial"),
+        ("1 Month", "1 Month"),
+        ("6 Month", "6 Month"),
+        ("Yearly", "Yearly")
+    )
+    SCANS_CHOICES = (
+        (10, 10),
+        (30, 30),
+        (50, 50),
+        (100, 100)
+    )
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="sub_users")
+    is_active = models.BooleanField(default=False)
+    subscription_type = models.CharField(choices=SUBSCRIPTION_TYPE_CHOICES, max_length=50)
+    subscription_term = models.CharField(choices=SUBSCRIPTION_TYPE_CHOICES, max_length=50)
+    start_date = models.DateTimeField(blank=True, null=True)
+    end_date = models.DateTimeField(blank=True, null=True)
+    total_scans = models.IntegerField(choices=SCANS_CHOICES)
+    used_scans = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def remaining_scans(self):
+        return max(self.total_scans - self.used_scans, 0)
+    
+    
+    def __str__(self):
+        return self.subscription_type
+
+
+
 
 

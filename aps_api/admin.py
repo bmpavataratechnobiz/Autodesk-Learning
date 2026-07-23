@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, RequestedSheetVersionRequest, SyncFolderData, RequestedVersionLinkRequest
+from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, RequestedSheetVersionRequest, SyncFolderData, RequestedVersionLinkRequest, Subscriptions
 
 
 
@@ -125,6 +125,12 @@ class RequestedSheetVersionRequestAdmin(admin.ModelAdmin):
     list_display_links = ["id", "email", "token", "scanned_sheet_version", "requested_sheet_version"]
 
 
+class SubscriptionAdmin(admin.ModelAdmin):
+    model = Subscriptions
+    list_display = ["id", "user", "subscription_type", "subscription_term", "total_scans", "used_scans", "start_date", "end_date"]
+    list_display_links = ["id", "user", "subscription_type"]
+
+
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
 admin.site.register(AutodeskAccount, AutodeskAccountAdmin)
 admin.site.register(AutoDeskProject, AutodeskProjectAdmin)
@@ -138,3 +144,4 @@ admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
 admin.site.register(SyncFolderData, SyncFolderDataAdmin)
 admin.site.register(RequestedVersionLinkRequest, RequestedVersionLinkRequestAdmin)
 admin.site.register(RequestedSheetVersionRequest, RequestedSheetVersionRequestAdmin)
+admin.site.register(Subscriptions, SubscriptionAdmin)

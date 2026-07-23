@@ -10,6 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from aps_api.models import AutodeskUser
 from datetime import timedelta
 from django.utils import timezone
+from aps_api.models import Subscriptions
 
 
 
@@ -115,14 +116,13 @@ class AutodeskCallbackView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user, _ = CustomUser.objects.get_or_create(
+        user, created = CustomUser.objects.get_or_create(
             email=email,
             defaults={
                 "email":email,
                 "first_name":name
             }
         )
-
 
         AutodeskUser.objects.update_or_create(
             user=user,
