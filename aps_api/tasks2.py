@@ -2,7 +2,7 @@ import requests     #type:ignore
 from django.conf import settings
 from django.core.mail import send_mail
 from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
-from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, RequestedVersionLinkRequest, SyncFolderData, RequestedSheetVersionRequest
+from .models import AutodeskAccount, AutoDeskProject, AutodeskFileVersions, AutodeskProjectFiles, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskFolders, AutodeskFolderMembers, RequestedVersionLinkRequest, Subscriptions, SyncFolderData, RequestedSheetVersionRequest
 from celery import shared_task
 from django.core.files.base import ContentFile
 import time
@@ -22,7 +22,7 @@ from pypdf import PdfReader, PdfWriter, Transformation      #type:ignore
 from reportlab.pdfgen import canvas     #type:ignore
 from reportlab.lib.utils import ImageReader     #type:ignore
 from reportlab.lib.colors import black      #type:ignore
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token"
@@ -1471,3 +1471,19 @@ def send_link_mail(id, type):
     obj.request_status = "SEND"
     obj.save(update_fields=["request_status"])
     
+
+
+@shared_task
+def deactivate_expired_subscriptions():
+    print("Running deactivate_expired_subscriptions...")
+
+    expired_date = timezone.now().date() - timedelta(days=1)
+
+    active_subscriptions = Subscriptions.objects.filter(
+        end_date__date=expired_date,
+        is_active=True
+    )
+    print(active_subscriptions.count())
+    for active_subscription in active_subscriptions:
+        active_subscription.is_active = False
+        active_subscription.save(update_fields=["is_active"])

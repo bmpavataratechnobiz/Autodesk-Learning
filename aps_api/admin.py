@@ -1,7 +1,8 @@
 from django import forms
-from django.contrib import admin
+from django.contrib import admin, messages
 from .models import AutoDeskProject, AutodeskAccount, AutodeskUser, AutodeskSheets, AutodeskVersionSet, AutodeskProjectMembers, AutodeskProjectFiles, AutodeskFileVersions, AutodeskFolders, AutodeskFolderMembers, RequestedSheetVersionRequest, SyncFolderData, RequestedVersionLinkRequest, Subscriptions
-
+from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
 
 
 
@@ -125,12 +126,6 @@ class RequestedSheetVersionRequestAdmin(admin.ModelAdmin):
     list_display_links = ["id", "email", "token", "scanned_sheet_version", "requested_sheet_version"]
 
 
-class SubscriptionAdmin(admin.ModelAdmin):
-    model = Subscriptions
-    list_display = ["id", "user", "subscription_type", "subscription_term", "total_scans", "used_scans", "start_date", "end_date"]
-    list_display_links = ["id", "user", "subscription_type"]
-
-
 admin.site.register(AutodeskUser, AutodeskUserAdmin)
 admin.site.register(AutodeskAccount, AutodeskAccountAdmin)
 admin.site.register(AutoDeskProject, AutodeskProjectAdmin)
@@ -144,4 +139,62 @@ admin.site.register(AutodeskFolderMembers, AutodeskFolderMembersAdmin)
 admin.site.register(SyncFolderData, SyncFolderDataAdmin)
 admin.site.register(RequestedVersionLinkRequest, RequestedVersionLinkRequestAdmin)
 admin.site.register(RequestedSheetVersionRequest, RequestedSheetVersionRequestAdmin)
-admin.site.register(Subscriptions, SubscriptionAdmin)
+
+
+
+
+TYPE_PRIORITY = {
+    'Free Trial':1,
+    'Basic':2,
+    'Standard':3,
+    'Premium':4
+}
+
+
+@admin.register(Subscriptions)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ['user', 'is_active', 'subscription_type', 'subscription_term', 'total_scans', 'used_scans', 'start_date', 'end_date']
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            if obj.start_date and obj.end_date:
+                if obj.end_date.date() <= obj.start_date.date():
+                    messages.warning(
+                        request,
+                        f"subscription end date must be grater that subscription start date"
+                    )
+                    raise ValidationError("subscription end date must be grater than subscription start date")
+
+        if not change:
+            if obj.start_date and obj.end_date:
+                if obj.end_date.date() <= obj.start_date.date():
+                    messages.warning(   
+                        request,
+                        f"subscription end date must be grater that subscription start date"
+                    )
+                    raise ValidationError("subscription end date must be grater than subscription start date")
+
+            active_subscriptions = Subscriptions.objects.filter(
+                user=obj.user,
+                is_active=True,
+            )
+
+            downgrade = False
+            for active_subscription in active_subscriptions:
+                if TYPE_PRIORITY[obj.subscription_type] > TYPE_PRIORITY[active_subscription.subscription_type]:
+                    active_subscription.is_active = False
+                    active_subscription.save()
+                    downgrade = True                
+                if TYPE_PRIORITY[obj.subscription_type] <= TYPE_PRIORITY[active_subscription.subscription_type]:
+                    messages.warning(
+                        request,
+                        f"You are creating a lower-tier/equal plan while {active_subscription.subscription_type} is active."
+                    )
+                    raise ValidationError("Cannot create lower-tier/equal subscription while higher is active!")
+            if downgrade:
+                messages.info(
+                    request,
+                    f"Lower-tier subscriptions for {obj.user.first_name} have been deactivated."
+                )
+
+        super().save_model(request, obj, form, change)

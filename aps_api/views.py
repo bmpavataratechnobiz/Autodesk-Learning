@@ -2,8 +2,8 @@ import requests  # type:ignore
 from django.shortcuts import get_object_or_404, render
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-# from .tasks import sync_autodesk_data, sync_selected_folders
-from .tasks2 import sync_autodesk_data, sync_selected_folders, send_link_mail
+from .tasks import sync_autodesk_data, sync_selected_folders, send_link_mail, send_scans_used_mail
+# from .tasks2 import sync_autodesk_data, sync_selected_folders, send_link_mail
 from .models import AutoDeskProject, AutodeskFolders, AutodeskSheets, AutodeskUser, AutodeskAccount, AutodeskFileVersions, AutodeskProjectFiles, RequestedVersionLinkRequest, Subscriptions, SyncFolderData, RequestedSheetVersionRequest
 from django_accounts.models import CustomUser
 from rest_framework.response import Response
@@ -565,13 +565,18 @@ class DownloadLatestVersion(APIView):
 
 ##### sheet
 class SheetData(APIView):
-    permission_classes = [IsAuthenticated]
 
     def get(self, request, sheet_id):
-        subscription = Subscriptions.objects.filter(
-            user=request.user,
+        try:
+            scanned_sheet_obj = AutodeskSheets.objects.get(id=sheet_id)
+            user = scanned_sheet_obj.project.account.autodesk_user.user
+        except AutodeskSheets.DoesNotExist:
+            return Response({"status":"error", "message":"data does not exist!"})
+
+        subscription = Subscriptions.objects.get(
+            user=user,
             is_active=True
-        ).first()
+        )
 
         if not subscription:
             return Response(
@@ -592,19 +597,19 @@ class SheetData(APIView):
             )
 
         if subscription.used_scans >= subscription.total_scans:
+            send_scans_used_mail.delay(user.email)
             return Response(
                 {
                     "status": "error",
-                    "message": "You have used all available scans."
+                    "message": "You have used all available scans. Please contact your admin!"
                 },
                 status=status.HTTP_403_FORBIDDEN
-            )
+            )            
 
         subscription.used_scans += 1
         subscription.save(update_fields=["used_scans"])
 
         try:
-            scanned_sheet_obj = AutodeskSheets.objects.get(id=sheet_id)
             sheet_number =  scanned_sheet_obj.sheetNumber
             latest_sheet_obj = (AutodeskSheets.objects.filter(
                 sheetNumber=sheet_number

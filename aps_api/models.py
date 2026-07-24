@@ -293,17 +293,39 @@ class Subscriptions(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="sub_users")
     is_active = models.BooleanField(default=False)
     subscription_type = models.CharField(choices=SUBSCRIPTION_TYPE_CHOICES, max_length=50)
-    subscription_term = models.CharField(choices=SUBSCRIPTION_TYPE_CHOICES, max_length=50)
+    subscription_term = models.CharField(choices=SUBSCRIPTION_TERM_CHOICES, max_length=50)
     start_date = models.DateTimeField(blank=True, null=True)
     end_date = models.DateTimeField(blank=True, null=True)
-    total_scans = models.IntegerField(choices=SCANS_CHOICES)
-    used_scans = models.IntegerField()
+    total_scans = models.IntegerField(choices=SCANS_CHOICES, blank=True, null=True)
+    used_scans = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
     def remaining_scans(self):
         return max(self.total_scans - self.used_scans, 0)
     
+    def save(self, *args, **kwargs):
+        if not self.start_date:
+            self.start_date = timezone.now()
+
+        if not self.end_date:
+            if self.subscription_term == "Free Trial":
+                self.end_date = self.start_date + timedelta(days=14)
+                self.total_scans = 10
+
+            elif self.subscription_term == "1 Month":
+                self.end_date = self.start_date + timedelta(days=30)
+                self.total_scans = 30
+
+            elif self.subscription_term == "6 Month":
+                self.end_date = self.start_date + timedelta(days=180)
+                self.total_scans = 50
+
+            elif self.subscription_term == "Yearly":
+                self.end_date = self.start_date + timedelta(days=365)
+                self.total_scans = 100
+
+        super().save(*args, **kwargs)
     
     def __str__(self):
         return self.subscription_type

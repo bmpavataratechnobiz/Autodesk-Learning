@@ -123,6 +123,14 @@ class AutodeskCallbackView(APIView):
                 "first_name":name
             }
         )
+        
+        if created:
+            Subscriptions.objects.create(
+                user=user,
+                is_active=True,
+                subscription_type="Free Trial",
+                subscription_term="Free Trial"
+            )
 
         AutodeskUser.objects.update_or_create(
             user=user,
