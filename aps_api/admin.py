@@ -153,6 +153,7 @@ TYPE_PRIORITY = {
 
 @admin.register(Subscriptions)
 class SubscriptionAdmin(admin.ModelAdmin):
+    # readonly_fields = ['is_active', "total_scans", "used_scans", "start_date", "end_date"]
     list_display = ['user', 'is_active', 'subscription_type', 'subscription_term', 'total_scans', 'used_scans', 'start_date', 'end_date']
 
     def save_model(self, request, obj, form, change):
@@ -179,22 +180,22 @@ class SubscriptionAdmin(admin.ModelAdmin):
                 is_active=True,
             )
 
-            downgrade = False
+            # downgrade = False
             for active_subscription in active_subscriptions:
-                if TYPE_PRIORITY[obj.subscription_type] > TYPE_PRIORITY[active_subscription.subscription_type]:
-                    active_subscription.is_active = False
-                    active_subscription.save()
-                    downgrade = True                
+                # if TYPE_PRIORITY[obj.subscription_type] > TYPE_PRIORITY[active_subscription.subscription_type]:
+                #     active_subscription.is_active = False
+                #     active_subscription.save()
+                    # downgrade = True                
                 if TYPE_PRIORITY[obj.subscription_type] <= TYPE_PRIORITY[active_subscription.subscription_type]:
                     messages.warning(
                         request,
                         f"You are creating a lower-tier/equal plan while {active_subscription.subscription_type} is active."
                     )
                     raise ValidationError("Cannot create lower-tier/equal subscription while higher is active!")
-            if downgrade:
-                messages.info(
-                    request,
-                    f"Lower-tier subscriptions for {obj.user.first_name} have been deactivated."
-                )
+            # if downgrade:
+            #     messages.info(
+            #         request,
+            #         f"Lower-tier subscriptions for {obj.user.first_name} have been deactivated."
+            #     )
 
         super().save_model(request, obj, form, change)

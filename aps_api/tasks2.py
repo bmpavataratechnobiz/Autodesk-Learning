@@ -664,7 +664,7 @@ def download_sheet_pdf(headers, project_id, sheet_id, sheet_number, upload_file_
         sheet_obj = AutodeskSheets.objects.get(id=sheet_db_id)
 
         qr_url = (
-            f"http://192.168.1.7:8000/api/aps/sheet_data/{sheet_obj.id}/"
+            f"http://192.168.1.4:8000/api/aps/sheet_data/{sheet_obj.id}/"
         )
 
         stamped_pdf = stamp_pdf_with_qr(
@@ -1453,7 +1453,7 @@ def send_link_mail(id, type):
     signed_token = signer.sign(str(obj.token))
 
     download_link = (
-        f"http://192.168.1.7:8000/api/aps/download/{type}/{signed_token}/"
+        f"http://192.168.1.4:8000/api/aps/download/{type}/{signed_token}/"
     )
 
     send_mail(
@@ -1471,19 +1471,3 @@ def send_link_mail(id, type):
     obj.request_status = "SEND"
     obj.save(update_fields=["request_status"])
     
-
-
-@shared_task
-def deactivate_expired_subscriptions():
-    print("Running deactivate_expired_subscriptions...")
-
-    expired_date = timezone.now().date() - timedelta(days=1)
-
-    active_subscriptions = Subscriptions.objects.filter(
-        end_date__date=expired_date,
-        is_active=True
-    )
-    print(active_subscriptions.count())
-    for active_subscription in active_subscriptions:
-        active_subscription.is_active = False
-        active_subscription.save(update_fields=["is_active"])

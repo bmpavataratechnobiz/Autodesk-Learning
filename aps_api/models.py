@@ -307,6 +307,7 @@ class Subscriptions(models.Model):
     def save(self, *args, **kwargs):
         if not self.start_date:
             self.start_date = timezone.now()
+            self.is_active = True
 
         if not self.end_date:
             if self.subscription_term == "Free Trial":

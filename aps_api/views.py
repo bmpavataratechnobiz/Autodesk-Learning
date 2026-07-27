@@ -18,6 +18,7 @@ from django.utils import timezone
 from datetime import timedelta
 from Autodesk_Project.settings import DEFAULT_FROM_EMAIL
 from django.core.signing import (TimestampSigner, SignatureExpired, BadSignature,)
+from django.db.models import Case, When, Value, IntegerField
 
 
 
@@ -573,10 +574,18 @@ class SheetData(APIView):
         except AutodeskSheets.DoesNotExist:
             return Response({"status":"error", "message":"data does not exist!"})
 
-        subscription = Subscriptions.objects.get(
+        subscription = Subscriptions.objects.filter(
             user=user,
             is_active=True
-        )
+        ).annotate(
+            priority=Case(
+                When(subscription_type="Free Trial", then=Value(1)),
+                When(subscription_type="Basic", then=Value(2)),
+                When(subscription_type="Standard", then=Value(3)),
+                When(subscription_type="Premium", then=Value(4)),
+                output_field=IntegerField(),
+            )
+        ).order_by("-priority").first()
 
         if not subscription:
             return Response(
